@@ -1,69 +1,85 @@
-/* AI Assistant / Stock Chat responsive layout fixes.
-   Keeps user and assistant messages readable when the chat is mounted
-   inside a narrow dashboard/content shell. */
+/* AI Assistant / Stock Chat layout.
+   The chat must keep a readable content column even when mounted
+   inside a dashboard/content shell. */
 
-main:has(input[placeholder*="Ask about"]) {
+/* Match the actual AI chat two-column grid instead of relying on an input placeholder. */
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) {
+  display: block;
   width: 100%;
-  max-width: 100%;
+  max-width: none;
   min-width: 0;
   overflow-x: hidden;
 }
 
-main:has(input[placeholder*="Ask about"]) > div {
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) > div {
+  display: grid;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
   width: 100%;
   max-width: 80rem;
   min-width: 0;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-main:has(input[placeholder*="Ask about"]) section {
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) section {
   width: 100%;
   min-width: 0;
 }
 
-/* User messages should never collapse to a word-by-word column. */
-main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"] {
+/* Both message rows must be allowed to occupy the content column. */
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-2xl,
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-4xl {
+  min-width: 0;
+}
+
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-2xl {
   width: min(100%, 42rem);
   max-width: 42rem;
-  min-width: 0;
 }
 
-/* Research answers use the available content width. */
-main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] {
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-4xl {
   width: 100%;
   max-width: 56rem;
-  min-width: 0;
 }
 
-main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"] > div,
-main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] > div {
+/* Never force normal prose into one-character columns. Long URLs/code may still wrap. */
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-2xl > div,
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-4xl > div {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* Keep cards and evidence content fluid. */
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-4xl .rounded-xl,
+main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-4xl [class*="border"] {
+  max-width: 100%;
+  min-width: 0;
 }
 
 @media (max-width: 1023px) {
-  main:has(input[placeholder*="Ask about"]) > div {
+  main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) > div {
+    display: block;
+    width: 100%;
+    max-width: none;
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
 
-  main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"],
-  main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] {
+  main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) aside {
+    display: none;
+  }
+
+  main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-2xl,
+  main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) .max-w-4xl {
+    width: 100%;
     max-width: 100%;
   }
 }
 
 @media (max-width: 640px) {
-  main:has(input[placeholder*="Ask about"]) > div {
-    gap: 0.75rem;
+  main:has([class*="lg:grid-cols-[260px_minmax(0,1fr)]"]) > div {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
-  }
-
-  main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"] {
-    width: 92%;
-  }
-
-  main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] {
-    width: 100%;
   }
 }
