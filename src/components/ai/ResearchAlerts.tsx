@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { Bell, BellOff, Copy, RefreshCw } from "lucide-react";
 import { askAI } from "@/lib/ai.functions";
-import type { AIAnswer, AIReasoningResult } from "@/lib/ai/ai-types";
+import type { AIReasoningResult } from "@/lib/ai/ai-types";
 
-type Alert = { id: string; symbol: string; prompt: string; enabled: boolean; last?: AIAnswer };
+type Alert = { id: string; symbol: string; prompt: string; enabled: boolean };
 
 const DEFAULTS: Alert[] = [
   { id: "movement", symbol: "INFY", prompt: "Check for important recent movement, news, corporate actions and risks for this stock", enabled: true },
