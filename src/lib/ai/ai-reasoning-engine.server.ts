@@ -9,7 +9,7 @@
  */
 
 import { routeQuestion } from "./ai-question-router";
-import { meetsRequirements, selectContext } from "./ai-context-selector";
+import { canUsePartialEvidence, meetsRequirements, selectContext } from "./ai-context-selector";
 import { ANSWER_SCHEMA, ANSWER_SCHEMA_NAME, SYSTEM_PROMPT, buildUserPrompt } from "./ai-prompt";
 import { formatAnswer, insufficientAnswer, parseModelJson } from "./ai-response-formatter";
 import { resolveProvider } from "./providers/registry.server";
@@ -32,7 +32,6 @@ const researchRequestFor = (symbol: string, domains: ResearchDomain[]): Research
   newsSinceDays: 14,
 });
 
-/** Reason over already-built contexts. Use this from a FastAPI bridge. */
 export async function reasonOverContexts(
   request: AIReasoningRequest,
   contexts: ResearchContext[],
@@ -42,14 +41,15 @@ export async function reasonOverContexts(
   const selected: AISelectedContext[] = contexts.map((context) => selectContext(context, plan));
 
   const gate = meetsRequirements(selected, plan);
-  if (!gate.ok) {
+  const partialGate = gate.ok ? { ok: true, reason: null } : canUsePartialEvidence(selected, plan);
+  if (!gate.ok && !partialGate.ok) {
     return {
       ok: true,
       data: insufficientAnswer({
         intent: plan.intent,
         question: request.question,
         symbols: selected.map((context) => context.symbol),
-        reason: gate.reason ?? "The evidence set does not meet this question's requirements.",
+        reason: gate.reason ?? partialGate.reason ?? "The evidence set does not meet this question's requirements.",
         providerId: provider.id,
         missing: selected.flatMap((context) =>
           context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`),
@@ -108,7 +108,6 @@ export async function reasonOverContexts(
   };
 }
 
-/** Full pipeline: resolve the entity, collect research contexts, then reason. */
 export async function runAIReasoning(
   request: AIReasoningRequest,
 ): Promise<AIReasoningResult> {
@@ -123,15 +122,10 @@ export async function runAIReasoning(
   let { plan } = routeQuestion(question, request.symbols ?? []);
   let resolvedSymbols = plan.symbols;
 
-  // Natural-language questions such as "Reliance Industries ka trend?"
-  // contain a company name rather than an exchange ticker. Resolve that name
-  // through the research service before the evidence pipeline starts.
   if (resolvedSymbols.length === 0) {
     const discovered = await resolveResearchSymbols(question, 4);
     resolvedSymbols = discovered.map((item) => item.symbol);
-    if (resolvedSymbols.length > 0) {
-      ({ plan } = routeQuestion(question, resolvedSymbols));
-    }
+    if (resolvedSymbols.length > 0) ({ plan } = routeQuestion(question, resolvedSymbols));
   }
 
   if (plan.symbols.length === 0) {
@@ -141,8 +135,7 @@ export async function runAIReasoning(
         intent: plan.intent,
         question,
         symbols: [],
-        reason:
-          "No listed NSE/BSE equity could be resolved from the question. Try the company name, NSE ticker, or BSE ticker.",
+        reason: "No listed NSE/BSE equity could be resolved from the question. Try the company name, NSE ticker, or BSE ticker.",
         providerId: resolveProvider(request.provider).id,
       }),
     };
@@ -163,10 +156,7 @@ export async function runAIReasoning(
         intent: plan.intent,
         question,
         symbols: plan.symbols,
-        reason:
-          !first || first.ok
-            ? "The research context engine returned no evidence."
-            : first.error.message,
+        reason: !first || first.ok ? "The research context engine returned no evidence." : first.error.message,
         providerId: resolveProvider(request.provider).id,
       }),
     };
