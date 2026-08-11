@@ -1,0 +1,69 @@
+/* AI Assistant / Stock Chat responsive layout fixes.
+   Keeps user and assistant messages readable when the chat is mounted
+   inside a narrow dashboard/content shell. */
+
+main:has(input[placeholder*="Ask about"]) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+main:has(input[placeholder*="Ask about"]) > div {
+  width: 100%;
+  max-width: 80rem;
+  min-width: 0;
+}
+
+main:has(input[placeholder*="Ask about"]) section {
+  width: 100%;
+  min-width: 0;
+}
+
+/* User messages should never collapse to a word-by-word column. */
+main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"] {
+  width: min(100%, 42rem);
+  max-width: 42rem;
+  min-width: 0;
+}
+
+/* Research answers use the available content width. */
+main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] {
+  width: 100%;
+  max-width: 56rem;
+  min-width: 0;
+}
+
+main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"] > div,
+main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1023px) {
+  main:has(input[placeholder*="Ask about"]) > div {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"],
+  main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  main:has(input[placeholder*="Ask about"]) > div {
+    gap: 0.75rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  main:has(input[placeholder*="Ask about"]) [class~="max-w-2xl"] {
+    width: 92%;
+  }
+
+  main:has(input[placeholder*="Ask about"]) [class~="max-w-4xl"] {
+    width: 100%;
+  }
+}
