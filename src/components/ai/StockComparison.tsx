@@ -31,9 +31,20 @@ export function StockComparison() {
     finally { setLoading(false); }
   };
 
-  const markdown = result?.ok ? claims(result).map(([title, value]) => `## ${title}\n\n${value}`).join("\n\n") + (result.data.sources.length ? `\n\n## Sources\n\n${result.data.sources.map(s => `- [${s.name}](${s.url ?? ""})`).join("\n")}` : "") : "");
+  const markdown = result?.ok
+    ? claims(result).map(([title, value]) => `## ${title}\n\n${value}`).join("\n\n") +
+      (result.data.sources.length
+        ? "\n\n## Sources\n\n" + result.data.sources.map(s => `- [${s.name}](${s.url ?? ""})`).join("\n")
+        : "")
+    : "";
   const copy = () => markdown && navigator.clipboard.writeText(markdown);
-  const download = () => { if (!markdown) return; const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([markdown], { type: "text/markdown" })); a.download = `${symbols.join("-vs-")}-comparison.md`; a.click(); };
+  const download = () => {
+    if (!markdown) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([markdown], { type: "text/markdown" }));
+    a.download = `${symbols.join("-vs-")}-comparison.md`;
+    a.click();
+  };
 
   return <section className="min-h-screen bg-background px-4 py-5 text-foreground sm:px-6">
     <div className="mx-auto max-w-6xl space-y-4">
