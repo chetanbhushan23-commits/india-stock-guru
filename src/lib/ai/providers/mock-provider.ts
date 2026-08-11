@@ -1,10 +1,10 @@
 /**
- * MockProvider — deterministic development provider.
+ * Development fallback provider.
  *
- * It performs no network call and no reasoning. It reads the evidence ids out
- * of the prompt payload and returns a schema-valid answer built purely from
- * them, so the whole pipeline (router → selector → formatter) can be
- * exercised offline without a key.
+ * This provider is deliberately deterministic and offline. It never invents
+ * market facts; it derives a qualified summary only from ResearchContext
+ * evidence supplied by AIReasoningEngine. Hosted/local AI providers remain
+ * preferred whenever configured.
  */
 
 import type { AIProvider, AIProviderRequest, AIProviderResponse } from "../ai-types";
@@ -15,7 +15,15 @@ type PromptEvidence = {
   label: string;
   value?: { kind: string; value?: unknown; unit?: string };
   direction?: string;
+  reliability?: number;
   at?: string | null;
+};
+
+type PromptContext = {
+  symbol?: string;
+  company?: string;
+  evidence?: PromptEvidence[];
+  gaps?: string[];
 };
 
 const render = (item: PromptEvidence): string => {
@@ -30,54 +38,91 @@ const render = (item: PromptEvidence): string => {
   return `${item.label}: ${rendered}${dated}.`;
 };
 
-function readContext(user: string): { evidence: PromptEvidence[]; gaps: string[] } {
-  const start = user.indexOf("[", user.indexOf("RESEARCH CONTEXT"));
+function readContext(user: string): PromptContext[] {
+  const marker = user.indexOf("RESEARCH CONTEXT");
+  const start = marker >= 0 ? user.indexOf("[", marker) : -1;
   const end = user.lastIndexOf("]");
-  if (start < 0 || end <= start) return { evidence: [], gaps: [] };
+  if (start < 0 || end <= start) return [];
   try {
-    const parsed = JSON.parse(user.slice(start, end + 1)) as {
-      evidence?: PromptEvidence[];
-      gaps?: string[];
-    }[];
-    return {
-      evidence: parsed.flatMap((entry) => entry.evidence ?? []),
-      gaps: parsed.flatMap((entry) => entry.gaps ?? []),
-    };
+    const parsed = JSON.parse(user.slice(start, end + 1)) as PromptContext[];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return { evidence: [], gaps: [] };
+    return [];
   }
 }
 
 const claims = (items: PromptEvidence[], limit: number) =>
   items.slice(0, limit).map((item) => ({ statement: render(item), evidenceIds: [item.id] }));
 
+function directionalClaim(evidence: PromptEvidence[], symbol: string) {
+  const directional = evidence.filter((item) => item.direction === "bullish" || item.direction === "bearish");
+  if (!directional.length) return null;
+  const bullish = directional.filter((item) => item.direction === "bullish");
+  const bearish = directional.filter((item) => item.direction === "bearish");
+  if (bullish.length > bearish.length) {
+    return {
+      statement: `${symbol} has more bullish directional evidence than bearish directional evidence in the supplied research context.`,
+      evidenceIds: bullish.slice(0, 3).map((item) => item.id),
+    };
+  }
+  if (bearish.length > bullish.length) {
+    return {
+      statement: `${symbol} has more bearish directional evidence than bullish directional evidence in the supplied research context.`,
+      evidenceIds: bearish.slice(0, 3).map((item) => item.id),
+    };
+  }
+  return {
+    statement: `${symbol} has mixed directional evidence in the supplied research context; the available directional signals are balanced.`,
+    evidenceIds: directional.slice(0, 4).map((item) => item.id),
+  };
+}
+
+function confidence(contexts: PromptContext[]): number {
+  const evidence = contexts.flatMap((context) => context.evidence ?? []);
+  if (!evidence.length) return 0;
+  const reliability = evidence.reduce((sum, item) => sum + Math.max(0, Math.min(1, item.reliability ?? 0.5)), 0) / evidence.length;
+  const dated = evidence.filter((item) => Boolean(item.at)).length / evidence.length;
+  const domainCount = new Set(evidence.map((item) => item.domain)).size;
+  const domainCoverage = Math.min(1, domainCount / 4);
+  return Math.round(Math.max(0, Math.min(100, reliability * 55 + dated * 20 + domainCoverage * 25)));
+}
+
 async function complete(request: AIProviderRequest): Promise<AIProviderResponse> {
-  const { evidence, gaps } = readContext(request.user);
-  const of = (domain: string) => evidence.filter((item) => item.domain === domain);
-  const bearish = evidence.filter((item) => item.direction === "bearish");
+  const contexts = readContext(request.user);
+  const context = contexts[0];
+  const evidence = contexts.flatMap((item) => item.evidence ?? []);
+  const symbol = context?.symbol ?? "the selected stock";
+  const direction = directionalClaim(evidence, symbol);
+  const gaps = [...new Set(contexts.flatMap((item) => item.gaps ?? []))];
+  const technical = evidence.filter((item) => item.domain === "technical");
+  const fundamental = evidence.filter((item) => item.domain === "fundamental");
+  const news = evidence.filter((item) => item.domain === "news");
+  const corporate = evidence.filter((item) => item.domain === "corporate-action" || item.domain === "event");
+  const risks = evidence.filter((item) => item.direction === "bearish");
 
   const answer = {
-    summary:
-      evidence.length === 0
-        ? ""
-        : `Deterministic mock reading of ${evidence.length} evidence items for intent "${request.intent}". Every statement below restates a single supplied fact; no interpretation is added.`,
-    evidence: claims(evidence, 5),
-    technicalEvidence: claims(of("technical"), 5),
-    fundamentalEvidence: claims(of("fundamental"), 5),
-    newsEvidence: claims(of("news"), 5),
-    corporateEvents: claims([...of("corporate-action"), ...of("event")], 5),
-    risks: claims(bearish, 4),
+    summary: direction
+      ? `${direction.statement} This is an evidence-based directional reading, not a buy/sell recommendation.`
+      : evidence.length
+        ? `The supplied research context contains ${evidence.length} evidence item(s) for ${symbol}, but it does not contain enough directional evidence to determine a trend.`
+        : "",
+    evidence: direction ? [direction, ...claims(evidence, 4)] : claims(evidence, 5),
+    technicalEvidence: claims(technical, 5),
+    fundamentalEvidence: claims(fundamental, 5),
+    newsEvidence: claims(news, 5),
+    corporateEvents: claims(corporate, 5),
+    risks: claims(risks, 4),
     missingInformation: gaps,
-    confidence: evidence.length === 0 ? 0 : 55,
+    confidence: confidence(contexts),
     insufficient: evidence.length === 0,
   };
 
-  return { raw: JSON.stringify(answer), model: "mock-deterministic-1" };
+  return { raw: JSON.stringify(answer), model: "grounded-fallback-1" };
 }
 
 export const mockProvider: AIProvider = {
   id: "mock",
-  name: "Mock (development)",
+  name: "Grounded fallback (development)",
   isConfigured: () => true,
   complete,
 };
