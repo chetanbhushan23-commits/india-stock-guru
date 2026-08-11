@@ -1,9 +1,8 @@
 /**
  * Market data provider (server-only).
  *
- * Currently talks to Yahoo Finance's public endpoints, which cover NSE (.NS)
- * and BSE (.BO) instruments. Exchange symbol discovery is deliberately kept
- * separate from AI reasoning; research collection remains the evidence layer.
+ * Currently talks to Yahoo Finance public endpoints for NSE (.NS) and BSE
+ * (.BO) instruments. Symbol discovery is kept separate from AI reasoning.
  */
 
 import {
@@ -15,6 +14,7 @@ import {
 import type { Candle, Interval, Range } from "./technical-types";
 
 const BASE = "https://query2.finance.yahoo.com";
+const SEARCH_BASE = "https://query1.finance.yahoo.com";
 const CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -53,34 +53,34 @@ const nullable = (value: unknown): number | null =>
 type RawQuote = Record<string, unknown>;
 
 function toQuote(raw: RawQuote): Quote {
-  const symbol = String(raw['symbol'] ?? "");
-  const price = nullable(raw['regularMarketPrice']);
-  const previousClose = nullable(raw['regularMarketPreviousClose']);
+  const symbol = String(raw["symbol"] ?? "");
+  const price = nullable(raw["regularMarketPrice"]);
+  const previousClose = nullable(raw["regularMarketPreviousClose"]);
   return {
     symbol,
     ticker: stripSuffix(symbol),
-    name: String(raw['longName'] ?? raw['shortName'] ?? symbol),
-    exchange: String(raw['fullExchangeName'] ?? exchangeOf(symbol)),
-    currency: String(raw['currency'] ?? "INR"),
-    marketState: String(raw['marketState'] ?? "CLOSED"),
+    name: String(raw["longName"] ?? raw["shortName"] ?? symbol),
+    exchange: String(raw["fullExchangeName"] ?? exchangeOf(symbol)),
+    currency: String(raw["currency"] ?? "INR"),
+    marketState: String(raw["marketState"] ?? "CLOSED"),
     price,
     previousClose,
-    change: nullable(raw['regularMarketChange']),
-    changePercent: nullable(raw['regularMarketChangePercent']),
-    open: nullable(raw['regularMarketOpen']),
-    dayHigh: nullable(raw['regularMarketDayHigh']),
-    dayLow: nullable(raw['regularMarketDayLow']),
-    fiftyTwoWeekHigh: nullable(raw['fiftyTwoWeekHigh']),
-    fiftyTwoWeekLow: nullable(raw['fiftyTwoWeekLow']),
-    volume: nullable(raw['regularMarketVolume']),
-    marketCap: nullable(raw['marketCap']),
+    change: nullable(raw["regularMarketChange"]),
+    changePercent: nullable(raw["regularMarketChangePercent"]),
+    open: nullable(raw["regularMarketOpen"]),
+    dayHigh: nullable(raw["regularMarketDayHigh"]),
+    dayLow: nullable(raw["regularMarketDayLow"]),
+    fiftyTwoWeekHigh: nullable(raw["fiftyTwoWeekHigh"]),
+    fiftyTwoWeekLow: nullable(raw["fiftyTwoWeekLow"]),
+    volume: nullable(raw["regularMarketVolume"]),
+    marketCap: nullable(raw["marketCap"]),
   };
 }
 
 function chartMetaToQuote(meta: RawQuote): Quote {
-  const symbol = String(meta['symbol'] ?? "");
-  const price = nullable(meta['regularMarketPrice']);
-  const previousClose = nullable(meta['previousClose'] ?? meta['chartPreviousClose']);
+  const symbol = String(meta["symbol"] ?? "");
+  const price = nullable(meta["regularMarketPrice"]);
+  const previousClose = nullable(meta["previousClose"] ?? meta["chartPreviousClose"]);
   const change = price !== null && previousClose !== null ? price - previousClose : null;
   const changePercent =
     change !== null && previousClose !== null && previousClose !== 0
@@ -89,58 +89,160 @@ function chartMetaToQuote(meta: RawQuote): Quote {
   return {
     symbol,
     ticker: stripSuffix(symbol),
-    name: String(meta['longName'] ?? meta['shortName'] ?? symbol),
-    exchange: String(meta['fullExchangeName'] ?? meta['exchangeName'] ?? exchangeOf(symbol)),
-    currency: String(meta['currency'] ?? "INR"),
-    marketState: String(meta['marketState'] ?? "CLOSED"),
+    name: String(meta["longName"] ?? meta["shortName"] ?? symbol),
+    exchange: String(meta["fullExchangeName"] ?? meta["exchangeName"] ?? exchangeOf(symbol)),
+    currency: String(meta["currency"] ?? "INR"),
+    marketState: String(meta["marketState"] ?? "CLOSED"),
     price,
     previousClose,
     change,
     changePercent,
-    open: nullable(meta['regularMarketOpen']),
-    dayHigh: nullable(meta['regularMarketDayHigh']),
-    dayLow: nullable(meta['regularMarketDayLow']),
-    fiftyTwoWeekHigh: nullable(meta['fiftyTwoWeekHigh']),
-    fiftyTwoWeekLow: nullable(meta['fiftyTwoWeekLow']),
-    volume: nullable(meta['regularMarketVolume']),
-    marketCap: nullable(meta['marketCap']),
+    open: nullable(meta["regularMarketOpen"]),
+    dayHigh: nullable(meta["regularMarketDayHigh"]),
+    dayLow: nullable(meta["regularMarketDayLow"]),
+    fiftyTwoWeekHigh: nullable(meta["fiftyTwoWeekHigh"]),
+    fiftyTwoWeekLow: nullable(meta["fiftyTwoWeekLow"]),
+    volume: nullable(meta["regularMarketVolume"]),
+    marketCap: nullable(meta["marketCap"]),
   };
+}
+
+const normalizeSearchText = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/**
+ * Yahoo search can return non-equity instruments or incomplete quoteType
+ * metadata. We therefore validate the NSE/BSE suffix first and only use
+ * quoteType as a secondary filter. Multiple search variants improve company
+ * name discovery (e.g. "HDFC Bank" -> HDFCBANK.NS).
+ */
+async function yahooSearch(query: string): Promise<SearchResult[]> {
+  const endpoints = [BASE, SEARCH_BASE];
+  const responseLists = await Promise.allSettled(
+    endpoints.map(async (base) => {
+      const url = `${base}/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=100&newsCount=0&listsCount=0&enableFuzzyQuery=true`;
+      const res = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" } });
+      if (!res.ok) return [] as RawQuote[];
+      const body = (await res.json()) as { quotes?: RawQuote[] };
+      return body.quotes ?? [];
+    }),
+  );
+
+  const raw = responseLists.flatMap((item) => (item.status === "fulfilled" ? item.value : []));
+  const seen = new Set<string>();
+  return raw
+    .filter((item) => {
+      const symbol = String(item["symbol"] ?? "");
+      const quoteType = String(item["quoteType"] ?? "").toUpperCase();
+      if (!/\.(NS|BO)$/i.test(symbol)) return false;
+      if (quoteType && !["EQUITY", "ETF"].includes(quoteType)) return false;
+      if (seen.has(symbol.toUpperCase())) return false;
+      seen.add(symbol.toUpperCase());
+      return true;
+    })
+    .map((item) => {
+      const symbol = String(item["symbol"]);
+      return {
+        symbol,
+        ticker: stripSuffix(symbol),
+        name: String(item["longname"] ?? item["longName"] ?? item["shortname"] ?? item["shortName"] ?? symbol),
+        exchange: exchangeOf(symbol),
+      };
+    });
+}
+
+const COMMON_ALIASES: Record<string, string[]> = {
+  "reliance industries": ["RELIANCE"],
+  "reliance": ["RELIANCE"],
+  infosys: ["INFY"],
+  "hdfc bank": ["HDFCBANK"],
+  "icici bank": ["ICICIBANK"],
+  "state bank of india": ["SBIN"],
+  "sbi": ["SBIN"],
+  "tata motors": ["TATAMOTORS"],
+  "tata steel": ["TATASTEEL"],
+  "tata consultancy services": ["TCS"],
+  tcs: ["TCS"],
+  itc: ["ITC"],
+  "larsen and toubro": ["LT"],
+  "l&t": ["LT"],
+  bharti airtel: ["BHARTIARTL"],
+  airtel: ["BHARTIARTL"],
+  "axis bank": ["AXISBANK"],
+  kotak: ["KOTAKBANK"],
+  "kotak mahindra bank": ["KOTAKBANK"],
+  "adani enterprises": ["ADANIENT"],
+  "adani ports": ["ADANIPORTS"],
+  maruti: ["MARUTI"],
+  "maruti suzuki": ["MARUTI"],
+  sun pharma: ["SUNPHARMA"],
+  lupin: ["LUPIN"],
+  wipro: ["WIPRO"],
+  hcltech: ["HCLTECH"],
+  "hcl technologies": ["HCLTECH"],
+  bajaj finance: ["BAJFINANCE"],
+  "bajaj finserv": ["BAJAJFINSV"],
+  titan: ["TITAN"],
+  ultratech: ["ULTRACEMCO"],
+  "ultratech cement": ["ULTRACEMCO"],
+};
+
+async function directSymbolCandidates(query: string): Promise<SearchResult[]> {
+  const normalized = normalizeSearchText(query);
+  const aliases = COMMON_ALIASES[normalized] ?? [];
+  const compact = normalized.replace(/\s+/g, "");
+  const candidates = [...new Set([...aliases, compact])].filter((symbol) => /^[A-Z0-9&-]{2,20}$/i.test(symbol));
+  if (candidates.length === 0) return [];
+
+  const symbols = candidates.flatMap((ticker) => [`${ticker.toUpperCase()}.NS`, `${ticker.toUpperCase()}.BO`]);
+  const quotes = await Promise.all(symbols.map(chartQuote));
+  return quotes
+    .filter((quote): quote is Quote => Boolean(quote))
+    .map((quote) => ({ symbol: quote.symbol, ticker: quote.ticker, name: quote.name, exchange: quote.exchange }));
 }
 
 /** Full-text discovery across NSE (.NS) and BSE (.BO) equities. */
 export async function providerSearch(query: string): Promise<SearchResult[]> {
-  const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=100&newsCount=0&listsCount=0&enableFuzzyQuery=true&quotesQueryId=tss_match_phrase_query`;
-  const res = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" } });
-  if (!res.ok) throw new Error(`Search failed (${res.status})`);
+  const trimmed = query.trim();
+  if (!trimmed) return [];
 
-  const body = (await res.json()) as { quotes?: RawQuote[] };
-  const results = (body.quotes ?? [])
+  const normalized = normalizeSearchText(trimmed);
+  const variants = [...new Set([
+    trimmed,
+    normalized,
+    normalized.replace(/\s+/g, ""),
+    normalized.split(" ").slice(0, 2).join(" "),
+  ].filter(Boolean))];
+
+  const batches = await Promise.all(variants.map((variant) => yahooSearch(variant)));
+  const direct = await directSymbolCandidates(trimmed);
+  const merged = [...batches.flat(), ...direct];
+  const q = normalizeSearchText(trimmed);
+  const seen = new Set<string>();
+
+  return merged
     .filter((item) => {
-      const symbol = String(item['symbol'] ?? "");
-      return item['quoteType'] === "EQUITY" && /\.(NS|BO)$/i.test(symbol);
+      const key = item.symbol.toUpperCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     })
-    .map((item) => {
-      const symbol = String(item['symbol']);
-      return {
-        symbol,
-        ticker: stripSuffix(symbol),
-        name: String(item['longname'] ?? item['shortname'] ?? symbol),
-        exchange: exchangeOf(symbol),
-      };
-    });
-
-  const q = query.trim().toLowerCase();
-  return results
     .sort((a, b) => {
       const rank = (item: SearchResult) => {
-        const ticker = item.ticker.toLowerCase();
-        const name = item.name.toLowerCase();
-        return (ticker === q ? 100 : 0) +
-          (name === q ? 95 : 0) +
-          (ticker.startsWith(q) ? 60 : 0) +
-          (name.startsWith(q) ? 55 : 0) +
-          (name.includes(q) ? 40 : 0) +
-          (ticker.includes(q) ? 35 : 0);
+        const ticker = normalizeSearchText(item.ticker);
+        const name = normalizeSearchText(item.name);
+        const compactQ = q.replace(/\s+/g, "");
+        return (ticker === compactQ ? 120 : 0) +
+          (name === q ? 115 : 0) +
+          (ticker.startsWith(compactQ) ? 75 : 0) +
+          (name.startsWith(q) ? 70 : 0) +
+          (name.includes(q) ? 55 : 0) +
+          (ticker.includes(compactQ) ? 50 : 0) +
+          (item.exchange === "NSE" ? 3 : 0);
       };
       return rank(b) - rank(a);
     })
@@ -214,9 +316,7 @@ export async function providerHistory(
     };
   };
 
-  if (body.chart?.error) {
-    throw new Error(body.chart.error.description ?? "History provider error");
-  }
+  if (body.chart?.error) throw new Error(body.chart.error.description ?? "History provider error");
 
   const result = body.chart?.result?.[0];
   const timestamps = result?.timestamp ?? [];
@@ -231,23 +331,8 @@ export async function providerHistory(
     const close = quote.close?.[i];
     const volume = quote.volume?.[i];
     const time = timestamps[i];
-    if (
-      time === undefined ||
-      typeof open !== "number" ||
-      typeof high !== "number" ||
-      typeof low !== "number" ||
-      typeof close !== "number"
-    ) {
-      continue;
-    }
-    candles.push({
-      time: time * 1000,
-      open,
-      high,
-      low,
-      close,
-      volume: typeof volume === "number" ? volume : 0,
-    });
+    if (time === undefined || typeof open !== "number" || typeof high !== "number" || typeof low !== "number" || typeof close !== "number") continue;
+    candles.push({ time: time * 1000, open, high, low, close, volume: typeof volume === "number" ? volume : 0 });
   }
   return candles;
 }
