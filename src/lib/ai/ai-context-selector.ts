@@ -22,7 +22,6 @@ const DOMAIN_KEYS: ResearchDomain[] = [
   "event",
 ];
 
-/** Extra weight per domain, per intent, applied to evidence importance. */
 const DOMAIN_BIAS: Partial<Record<AIRoutePlan["intent"], Partial<Record<ResearchDomain, number>>>> = {
   "technical-analysis": { technical: 25, market: 8 },
   "swing-trade": { technical: 22, market: 10, news: 4 },
@@ -92,7 +91,6 @@ export function selectContext(
   };
 }
 
-/** Source list derived from a set of cited evidence ids. */
 export function sourcesFor(
   contexts: AISelectedContext[],
   citedIds: Set<string>,
@@ -104,9 +102,7 @@ export function sourcesFor(
       const key = `${item.sourceId}|${item.url ?? ""}`;
       const existing = seen.get(key);
       if (existing) {
-        if (!existing.observedAt || (item.observedAt && item.observedAt > existing.observedAt)) {
-          existing.observedAt = item.observedAt;
-        }
+        if (!existing.observedAt || (item.observedAt && item.observedAt > existing.observedAt)) existing.observedAt = item.observedAt;
         continue;
       }
       seen.set(key, {
@@ -121,31 +117,39 @@ export function sourcesFor(
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Does the selection satisfy the plan's hard requirements? */
 export function meetsRequirements(
   contexts: AISelectedContext[],
   plan: AIRoutePlan,
 ): { ok: boolean; reason: string | null } {
   if (contexts.length === 0) return { ok: false, reason: "No research context was supplied." };
   for (const context of contexts) {
-    if (context.evidence.length === 0) {
-      return { ok: false, reason: `No evidence available for ${context.symbol}.` };
-    }
-    const missing = plan.requiredDomains.filter(
-      (domain) => (context.byDomain[domain] ?? []).length === 0,
-    );
-    if (missing.length > 0) {
-      return {
-        ok: false,
-        reason: `Missing required evidence domains for ${context.symbol}: ${missing.join(", ")}.`,
-      };
-    }
+    if (context.evidence.length === 0) return { ok: false, reason: `No evidence available for ${context.symbol}.` };
+    const missing = plan.requiredDomains.filter((domain) => (context.byDomain[domain] ?? []).length === 0);
+    if (missing.length > 0) return { ok: false, reason: `Missing required evidence domains for ${context.symbol}: ${missing.join(", ")}.` };
     if (context.quality.overall < plan.minQuality) {
-      return {
-        ok: false,
-        reason: `Evidence quality for ${context.symbol} (${Math.round(context.quality.overall)}) is below the ${plan.minQuality} threshold for this question.`,
-      };
+      return { ok: false, reason: `Evidence quality for ${context.symbol} (${Math.round(context.quality.overall)}) is below the ${plan.minQuality} threshold for this question.` };
     }
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * Safe fallback for partially available research. This does not weaken the
+ * normal hard gate: it is used only when at least one usable evidence domain
+ * exists and the context quality is high enough to support a qualified answer.
+ */
+export function canUsePartialEvidence(
+  contexts: AISelectedContext[],
+  plan: AIRoutePlan,
+): { ok: boolean; reason: string | null } {
+  if (contexts.length === 0) return { ok: false, reason: "No research context was supplied." };
+  for (const context of contexts) {
+    if (context.evidence.length === 0) return { ok: false, reason: `No evidence available for ${context.symbol}.` };
+    if (context.quality.overall < Math.max(25, Math.min(plan.minQuality, 35))) {
+      return { ok: false, reason: `Evidence quality for ${context.symbol} is too low for a qualified answer.` };
+    }
+    const available = plan.domains.filter((domain) => (context.byDomain[domain] ?? []).length > 0);
+    if (available.length === 0) return { ok: false, reason: `No requested evidence domain is available for ${context.symbol}.` };
   }
   return { ok: true, reason: null };
 }
