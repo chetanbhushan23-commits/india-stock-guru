@@ -2,7 +2,8 @@
  * AIReasoningEngine (server-only).
  *
  * Pipeline: route → resolve symbols when needed → build ResearchContext(s) →
- * select evidence → prompt a provider → format + validate the answer.
+ * select evidence → add derived directional evidence → prompt a provider →
+ * format + validate the answer.
  *
  * The engine consumes ResearchContext objects for evidence. Symbol discovery
  * is delegated to the research service and never accesses market providers here.
@@ -10,6 +11,7 @@
 
 import { routeQuestion } from "./ai-question-router";
 import { canUsePartialEvidence, meetsRequirements, selectContext } from "./ai-context-selector";
+import { addDirectionalEvidence } from "./directional-evidence";
 import { ANSWER_SCHEMA, ANSWER_SCHEMA_NAME, SYSTEM_PROMPT, buildUserPrompt } from "./ai-prompt";
 import { formatAnswer, insufficientAnswer, parseModelJson } from "./ai-response-formatter";
 import { resolveProvider } from "./providers/registry.server";
@@ -38,7 +40,9 @@ export async function reasonOverContexts(
 ): Promise<AIReasoningResult> {
   const { plan } = routeQuestion(request.question, request.symbols ?? []);
   const provider = resolveProvider(request.provider);
-  const selected: AISelectedContext[] = contexts.map((context) => selectContext(context, plan));
+  const selected: AISelectedContext[] = contexts.map((context) =>
+    addDirectionalEvidence(selectContext(context, plan), plan.intent),
+  );
 
   const gate = meetsRequirements(selected, plan);
   const partialGate = gate.ok ? { ok: true, reason: null } : canUsePartialEvidence(selected, plan);

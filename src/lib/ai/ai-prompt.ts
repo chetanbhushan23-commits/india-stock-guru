@@ -72,7 +72,10 @@ ABSOLUTE RULES
 8. Partial evidence is allowed: if one requested domain is missing but another domain contains reliable evidence, answer only what the available evidence proves and explicitly disclose the missing domain. Do NOT mark the answer insufficient solely because one requested domain is unavailable.
 9. Set "insufficient" to true only when there is no usable evidence-backed answer to the actual question. When sufficient evidence exists, provide a qualified summary and a confidence score that reflects the limitations.
 10. Sections that have no supporting evidence must be empty arrays. Never pad a section.
-11. Keep statements short, factual and dated where the evidence is dated. Currency is INR unless the evidence says otherwise.`;
+11. Keep statements short, factual and dated where the evidence is dated. Currency is INR unless the evidence says otherwise.
+12. For trend, technical-analysis, swing-trade, movement, rise/fall and buy-or-wait questions, interpret the supplied directional evidence. Do not merely repeat that evidence exists. If technical evidence is present, determine the technical bias from its directional indicators and the supplied technical directional synthesis. If technical evidence is unavailable, state that technical confirmation is unavailable and use any available market directional evidence for a qualified answer.
+13. A derived directional-synthesis evidence item is a valid computed fact because it is explicitly derived from the cited evidence ids in its note. Cite the synthesis id and, where useful, its underlying evidence ids.
+14. Never call a context "non-directional" when it contains a directional-synthesis item or directional technical/market evidence. Explain mixed signals when bullish and bearish evidence materially conflict.`;
 
 const compactEvidence = (context: AISelectedContext) =>
   context.evidence.map((item) => ({
