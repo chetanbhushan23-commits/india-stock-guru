@@ -1,10 +1,9 @@
 /**
  * Market data provider (server-only).
  *
- * Currently talks to Yahoo Finance's public endpoints, which cover every
- * NSE (.NS) and BSE (.BO) listed instrument. This file is the ONLY place
- * that knows about the upstream provider — swap the two exported functions
- * for FastAPI calls and the rest of the app is untouched.
+ * Currently talks to Yahoo Finance's public endpoints, which cover NSE (.NS)
+ * and BSE (.BO) instruments. Exchange symbol discovery is deliberately kept
+ * separate from AI reasoning; research collection remains the evidence layer.
  */
 
 import {
@@ -77,21 +76,18 @@ function toQuote(raw: RawQuote): Quote {
   };
 }
 
-/** Full-text search across NSE/BSE listed equities. */
+/** Full-text discovery across NSE (.NS) and BSE (.BO) equities. */
 export async function providerSearch(query: string): Promise<SearchResult[]> {
-  const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=25&newsCount=0&listsCount=0&enableFuzzyQuery=false`;
+  const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=100&newsCount=0&listsCount=0&enableFuzzyQuery=true&quotesQueryId=tss_match_phrase_query`;
   const res = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" } });
   if (!res.ok) throw new Error(`Search failed (${res.status})`);
 
   const body = (await res.json()) as { quotes?: RawQuote[] };
-  return (body.quotes ?? [])
+  const results = (body.quotes ?? [])
     .filter((item) => {
       const symbol = String(item['symbol'] ?? "");
-      return (
-        item['quoteType'] === "EQUITY" && /\.(NS|BO)$/i.test(symbol) && !/^0P/i.test(symbol)
-      );
+      return item['quoteType'] === "EQUITY" && /\.(NS|BO)$/i.test(symbol);
     })
-    .slice(0, 12)
     .map((item) => {
       const symbol = String(item['symbol']);
       return {
@@ -101,6 +97,23 @@ export async function providerSearch(query: string): Promise<SearchResult[]> {
         exchange: exchangeOf(symbol),
       };
     });
+
+  const q = query.trim().toLowerCase();
+  return results
+    .sort((a, b) => {
+      const rank = (item: SearchResult) => {
+        const ticker = item.ticker.toLowerCase();
+        const name = item.name.toLowerCase();
+        return (ticker === q ? 100 : 0) +
+          (name === q ? 95 : 0) +
+          (ticker.startsWith(q) ? 60 : 0) +
+          (name.startsWith(q) ? 55 : 0) +
+          (name.includes(q) ? 40 : 0) +
+          (ticker.includes(q) ? 35 : 0);
+      };
+      return rank(b) - rank(a);
+    })
+    .slice(0, 50);
 }
 
 /** Latest available quotes for one or more symbols. */
@@ -186,4 +199,3 @@ export async function providerHistory(
   }
   return candles;
 }
-
