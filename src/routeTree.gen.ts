@@ -15,6 +15,7 @@ import { Route as AiAssistantRouteImport } from './routes/ai-assistant'
 import { Route as StockChatRouteImport } from './routes/stock-chat'
 import { Route as StockChatSymbolRouteImport } from './routes/stock-chat.$symbol'
 import { Route as ResearchHistoryRouteImport } from './routes/research-history'
+import { Route as ResearchRouteImport } from './routes/research'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +47,11 @@ const ResearchHistoryRoute = ResearchHistoryRouteImport.update({
   path: '/research-history',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResearchRoute = ResearchRouteImport.update({
+  id: '/research',
+  path: '/research',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +60,7 @@ export interface FileRoutesByFullPath {
   '/stock-chat': typeof StockChatRoute
   '/stock-chat/$symbol': typeof StockChatSymbolRoute
   '/research-history': typeof ResearchHistoryRoute
+  '/research': typeof ResearchRoute
 }
 export interface FileRoutesByTo extends FileRoutesByFullPath {}
 export interface FileRoutesById {
@@ -64,13 +71,14 @@ export interface FileRoutesById {
   '/stock-chat': typeof StockChatRoute
   '/stock-chat/$symbol': typeof StockChatSymbolRoute
   '/research-history': typeof ResearchHistoryRoute
+  '/research': typeof ResearchRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/stock/$symbol' | '/ai-assistant' | '/stock-chat' | '/stock-chat/$symbol' | '/research-history'
+  fullPaths: '/' | '/stock/$symbol' | '/ai-assistant' | '/stock-chat' | '/stock-chat/$symbol' | '/research-history' | '/research'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/stock/$symbol' | '/ai-assistant' | '/stock-chat' | '/stock-chat/$symbol' | '/research-history'
-  id: '__root__' | '/' | '/stock/$symbol' | '/ai-assistant' | '/stock-chat' | '/stock-chat/$symbol' | '/research-history'
+  to: '/' | '/stock/$symbol' | '/ai-assistant' | '/stock-chat' | '/stock-chat/$symbol' | '/research-history' | '/research'
+  id: '__root__' | '/' | '/stock/$symbol' | '/ai-assistant' | '/stock-chat' | '/stock-chat/$symbol' | '/research-history' | '/research'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -80,6 +88,7 @@ export interface RootRouteChildren {
   StockChatRoute: typeof StockChatRoute
   StockChatSymbolRoute: typeof StockChatSymbolRoute
   ResearchHistoryRoute: typeof ResearchHistoryRoute
+  ResearchRoute: typeof ResearchRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -126,6 +135,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResearchHistoryRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/research': {
+      id: '/research'
+      path: '/research'
+      fullPath: '/research'
+      preLoaderRoute: typeof ResearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -136,6 +152,7 @@ const rootRouteChildren: RootRouteChildren = {
   StockChatRoute,
   StockChatSymbolRoute,
   ResearchHistoryRoute,
+  ResearchRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
