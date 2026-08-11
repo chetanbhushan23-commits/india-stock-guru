@@ -15,6 +15,7 @@ import {
 import type { Candle, Interval, Range } from "./technical-types";
 
 const BASE = "https://query2.finance.yahoo.com";
+const CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 
@@ -76,6 +77,36 @@ function toQuote(raw: RawQuote): Quote {
   };
 }
 
+function chartMetaToQuote(meta: RawQuote): Quote {
+  const symbol = String(meta['symbol'] ?? "");
+  const price = nullable(meta['regularMarketPrice']);
+  const previousClose = nullable(meta['previousClose'] ?? meta['chartPreviousClose']);
+  const change = price !== null && previousClose !== null ? price - previousClose : null;
+  const changePercent =
+    change !== null && previousClose !== null && previousClose !== 0
+      ? (change / previousClose) * 100
+      : null;
+  return {
+    symbol,
+    ticker: stripSuffix(symbol),
+    name: String(meta['longName'] ?? meta['shortName'] ?? symbol),
+    exchange: String(meta['fullExchangeName'] ?? meta['exchangeName'] ?? exchangeOf(symbol)),
+    currency: String(meta['currency'] ?? "INR"),
+    marketState: String(meta['marketState'] ?? "CLOSED"),
+    price,
+    previousClose,
+    change,
+    changePercent,
+    open: nullable(meta['regularMarketOpen']),
+    dayHigh: nullable(meta['regularMarketDayHigh']),
+    dayLow: nullable(meta['regularMarketDayLow']),
+    fiftyTwoWeekHigh: nullable(meta['fiftyTwoWeekHigh']),
+    fiftyTwoWeekLow: nullable(meta['fiftyTwoWeekLow']),
+    volume: nullable(meta['regularMarketVolume']),
+    marketCap: nullable(meta['marketCap']),
+  };
+}
+
 /** Full-text discovery across NSE (.NS) and BSE (.BO) equities. */
 export async function providerSearch(query: string): Promise<SearchResult[]> {
   const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=100&newsCount=0&listsCount=0&enableFuzzyQuery=true&quotesQueryId=tss_match_phrase_query`;
@@ -116,22 +147,43 @@ export async function providerSearch(query: string): Promise<SearchResult[]> {
     .slice(0, 50);
 }
 
-/** Latest available quotes for one or more symbols. */
+async function chartQuote(symbol: string): Promise<Quote | null> {
+  const url = `${CHART_BASE}/${encodeURIComponent(symbol)}?interval=1d&range=5d&includePrePost=false`;
+  const res = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" } });
+  if (!res.ok) return null;
+  const body = (await res.json()) as { chart?: { error?: { description?: string } | null; result?: { meta?: RawQuote }[] } };
+  const meta = body.chart?.result?.[0]?.meta;
+  return meta ? chartMetaToQuote(meta) : null;
+}
+
+/** Latest available quotes for one or more symbols, with chart fallback. */
 export async function providerQuotes(symbols: string[]): Promise<Quote[]> {
   if (symbols.length === 0) return [];
 
-  const request = async (retry: boolean): Promise<Response> => {
-    const { cookie, crumb } = await getSession(retry);
-    const url = `${BASE}/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(","))}&crumb=${encodeURIComponent(crumb)}`;
-    return fetch(url, { headers: { "user-agent": UA, cookie, accept: "application/json" } });
-  };
+  try {
+    const request = async (retry: boolean): Promise<Response> => {
+      const { cookie, crumb } = await getSession(retry);
+      const url = `${BASE}/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(","))}&crumb=${encodeURIComponent(crumb)}`;
+      return fetch(url, { headers: { "user-agent": UA, cookie, accept: "application/json" } });
+    };
 
-  let res = await request(false);
-  if (res.status === 401 || res.status === 403) res = await request(true);
-  if (!res.ok) throw new Error(`Quote fetch failed (${res.status})`);
+    let res = await request(false);
+    if (res.status === 401 || res.status === 403) res = await request(true);
+    if (!res.ok) throw new Error(`Quote fetch failed (${res.status})`);
 
-  const body = (await res.json()) as { quoteResponse?: { result?: RawQuote[] } };
-  return (body.quoteResponse?.result ?? []).map(toQuote);
+    const body = (await res.json()) as { quoteResponse?: { result?: RawQuote[] } };
+    const quotes = (body.quoteResponse?.result ?? []).map(toQuote);
+    if (quotes.length === symbols.length) return quotes;
+
+    const missing = new Set(symbols.filter((symbol) => !quotes.some((quote) => quote.symbol === symbol)));
+    const fallbacks = await Promise.all([...missing].map(chartQuote));
+    return [...quotes, ...fallbacks.filter((quote): quote is Quote => Boolean(quote))];
+  } catch {
+    const fallbacks = await Promise.all(symbols.map(chartQuote));
+    const usable = fallbacks.filter((quote): quote is Quote => Boolean(quote));
+    if (usable.length > 0) return usable;
+    throw new Error("Quote provider unavailable and chart fallback returned no data.");
+  }
 }
 
 /** Historical OHLCV candles used by the technical analysis engine. */
@@ -140,7 +192,7 @@ export async function providerHistory(
   interval: Interval = "1d",
   range: Range = "1y",
 ): Promise<Candle[]> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}&includePrePost=false`;
+  const url = `${CHART_BASE}/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}&includePrePost=false`;
   const res = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" } });
   if (!res.ok) throw new Error(`History fetch failed (${res.status})`);
 
