@@ -5,15 +5,20 @@
  * and hands everything to the ContextBuilder. No AI calls happen here.
  */
 
-import { exchangeOf } from "./market-types";
+import { exchangeOf, stripSuffix } from "./market-types";
+import { resolveQuestionSymbols } from "./exchange-symbols.server";
 import { buildResearchContext } from "./research-context-builder";
 import { RESEARCH_COLLECTORS } from "./research-collectors.server";
-import { stripSuffix } from "./market-types";
 import type {
   ResearchContextResult,
   ResearchDomainCoverage,
   ResearchRequest,
 } from "./research-types";
+
+/** Resolve natural-language company names/tickers into exchange-qualified symbols. */
+export async function resolveResearchSymbols(question: string, limit = 4) {
+  return resolveQuestionSymbols(question, limit);
+}
 
 export async function runResearchContext(
   request: ResearchRequest,

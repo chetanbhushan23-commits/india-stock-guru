@@ -1,12 +1,11 @@
 /**
  * AIReasoningEngine (server-only).
  *
- * Pipeline: route → build ResearchContext(s) → select evidence → prompt a
- * provider → format + validate the answer.
+ * Pipeline: route → resolve symbols when needed → build ResearchContext(s) →
+ * select evidence → prompt a provider → format + validate the answer.
  *
- * The engine consumes ONLY ResearchContext objects. It never imports a market,
- * technical, fundamental or news provider; the sole upstream call is to the
- * Phase 6.1 research service, which owns all data collection.
+ * The engine consumes ResearchContext objects for evidence. Symbol discovery
+ * is delegated to the research service and never accesses market providers here.
  */
 
 import { routeQuestion } from "./ai-question-router";
@@ -14,7 +13,7 @@ import { meetsRequirements, selectContext } from "./ai-context-selector";
 import { ANSWER_SCHEMA, ANSWER_SCHEMA_NAME, SYSTEM_PROMPT, buildUserPrompt } from "./ai-prompt";
 import { formatAnswer, insufficientAnswer, parseModelJson } from "./ai-response-formatter";
 import { resolveProvider } from "./providers/registry.server";
-import { runResearchContext } from "../research-context.server";
+import { resolveResearchSymbols, runResearchContext } from "../research-context.server";
 import type { ResearchContext, ResearchDomain, ResearchRequest } from "../research-types";
 import type {
   AIReasoningRequest,
@@ -109,7 +108,7 @@ export async function reasonOverContexts(
   };
 }
 
-/** Full pipeline: collect the research contexts, then reason over them. */
+/** Full pipeline: resolve the entity, collect research contexts, then reason. */
 export async function runAIReasoning(
   request: AIReasoningRequest,
 ): Promise<AIReasoningResult> {
@@ -121,7 +120,19 @@ export async function runAIReasoning(
     };
   }
 
-  const { plan } = routeQuestion(question, request.symbols ?? []);
+  let { plan } = routeQuestion(question, request.symbols ?? []);
+  let resolvedSymbols = plan.symbols;
+
+  // Natural-language questions such as "Reliance Industries ka trend?"
+  // contain a company name rather than an exchange ticker. Resolve that name
+  // through the research service before the evidence pipeline starts.
+  if (resolvedSymbols.length === 0) {
+    const discovered = await resolveResearchSymbols(question, 4);
+    resolvedSymbols = discovered.map((item) => item.symbol);
+    if (resolvedSymbols.length > 0) {
+      ({ plan } = routeQuestion(question, resolvedSymbols));
+    }
+  }
 
   if (plan.symbols.length === 0) {
     return {
@@ -131,7 +142,7 @@ export async function runAIReasoning(
         question,
         symbols: [],
         reason:
-          "No company symbol was identified in the question, so no verifiable evidence could be collected.",
+          "No listed NSE/BSE equity could be resolved from the question. Try the company name, NSE ticker, or BSE ticker.",
         providerId: resolveProvider(request.provider).id,
       }),
     };
@@ -161,5 +172,5 @@ export async function runAIReasoning(
     };
   }
 
-  return reasonOverContexts({ ...request, question }, contexts);
+  return reasonOverContexts({ ...request, question, symbols: plan.symbols }, contexts);
 }
