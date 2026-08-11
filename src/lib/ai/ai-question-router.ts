@@ -10,66 +10,78 @@ import { classifyIntent } from "./intent-classifier";
 import type { AIIntent, AIRoutePlan, IntentClassification } from "./ai-types";
 import type { ResearchDomain } from "../research-types";
 
-const ALL: ResearchDomain[] = ["market", "technical", "fundamental", "news"];
+// For a resolved NSE/BSE stock question, collect the broadest evidence set.
+// The selector still ranks evidence by intent, so this increases coverage
+// without forcing the model to treat every domain as equally important.
+const STOCK_EVIDENCE: ResearchDomain[] = [
+  "market",
+  "technical",
+  "fundamental",
+  "news",
+  "corporate-action",
+  "event",
+];
+
+const MARKET_NEWS: ResearchDomain[] = ["market", "news", "corporate-action", "event"];
 
 type Policy = Omit<AIRoutePlan, "intent" | "symbols" | "multiSymbol">;
 
 const POLICIES: Record<AIIntent, Policy> = {
   "why-fall": {
-    domains: ALL, requiredDomains: ["market"], evidenceBudget: 40, minQuality: 35,
-    focus: "Explain the decline strictly from dated evidence. Rank causes by importance and recency.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market"], evidenceBudget: 60, minQuality: 35,
+    focus: "Explain the decline using dated market, technical, news, fundamental and event evidence. Rank causes by importance and recency.",
   },
   "why-rise": {
-    domains: ALL, requiredDomains: ["market"], evidenceBudget: 40, minQuality: 35,
-    focus: "Explain the advance strictly from dated evidence. Rank causes by importance and recency.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market"], evidenceBudget: 60, minQuality: 35,
+    focus: "Explain the advance using dated market, technical, news, fundamental and event evidence. Rank causes by importance and recency.",
   },
   "explain-movement": {
-    domains: ALL, requiredDomains: ["market"], evidenceBudget: 40, minQuality: 30,
-    focus: "Describe the latest price action and attribute it only to evidence that is dated close to it.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market"], evidenceBudget: 60, minQuality: 30,
+    focus: "Describe price action and combine technical structure with relevant news, fundamentals, corporate actions and events when evidence supports them.",
   },
   "technical-analysis": {
-    domains: ["market", "technical"], requiredDomains: ["technical"], evidenceBudget: 45, minQuality: 40,
-    focus: "Read the indicator set as a whole. State the trend, momentum, volatility and key levels.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["technical"], evidenceBudget: 60, minQuality: 40,
+    focus: "Prioritize technical indicators and levels, while using market, fundamental, news and event evidence for context and risk.",
   },
   "fundamental-analysis": {
-    domains: ["market", "fundamental"], requiredDomains: ["fundamental"], evidenceBudget: 45, minQuality: 40,
-    focus: "Assess valuation, profitability, leverage and growth using only reported figures.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["fundamental"], evidenceBudget: 60, minQuality: 40,
+    focus: "Prioritize reported financials and valuation, while using market, technical, news, corporate actions and events for context.",
   },
   "news-analysis": {
-    domains: ["market", "news"], requiredDomains: ["news"], evidenceBudget: 40, minQuality: 30,
-    focus: "Group headlines by theme, note the source and date of each, and flag single-source stories.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["news"], evidenceBudget: 60, minQuality: 30,
+    focus: "Prioritize recent publisher and exchange evidence, then connect confirmed news to market, technical and fundamental context without inventing causality.",
   },
   "corporate-actions": {
-    domains: ["news"], requiredDomains: ["news"], evidenceBudget: 30, minQuality: 25,
-    focus: "List only confirmed corporate actions and exchange filings with their dates.",
+    domains: MARKET_NEWS, requiredDomains: ["news"], evidenceBudget: 45, minQuality: 25,
+    focus: "List confirmed corporate actions, exchange notices and events with dates, while using market context only when supported.",
   },
   "compare-stocks": {
-    domains: ALL, requiredDomains: ["market"], evidenceBudget: 30, minQuality: 40,
-    focus: "Compare the symbols metric by metric. Never compare a metric that is missing for one of them.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market"], evidenceBudget: 60, minQuality: 40,
+    focus: "Compare symbols metric by metric across market, technical, fundamental, news and event evidence. Never compare a missing metric.",
   },
   "buy-or-wait": {
-    domains: ALL, requiredDomains: ["market", "technical"], evidenceBudget: 45, minQuality: 50,
-    focus: "Lay out the case for acting now versus waiting. Present trade-offs, not a directive.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market", "technical"], evidenceBudget: 60, minQuality: 50,
+    focus: "Present evidence-based trade-offs using technical, fundamental, news, event and risk context. Never give a guaranteed outcome or directive.",
   },
   "swing-trade": {
-    domains: ["market", "technical", "news"], requiredDomains: ["technical"], evidenceBudget: 40, minQuality: 45,
-    focus: "Focus on multi-day structure: trend, momentum, volatility and the nearest levels.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["technical"], evidenceBudget: 60, minQuality: 45,
+    focus: "Focus on multi-day structure, momentum, volatility and levels, with news, fundamentals and events as supporting risk context.",
   },
   "long-term": {
-    domains: ALL, requiredDomains: ["fundamental"], evidenceBudget: 45, minQuality: 50,
-    focus: "Weight multi-year fundamentals over short-term price action.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["fundamental"], evidenceBudget: 60, minQuality: 50,
+    focus: "Weight multi-year fundamentals most heavily while checking valuation, technical context, news, corporate actions and material events.",
   },
   "risk-analysis": {
-    domains: ALL, requiredDomains: ["market"], evidenceBudget: 45, minQuality: 35,
-    focus: "Enumerate concrete, evidenced risks: leverage, volatility, concentration, regulatory and event risk.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market"], evidenceBudget: 60, minQuality: 35,
+    focus: "Enumerate concrete evidenced risks across market, technical, fundamental, news, corporate-action and event context.",
   },
   portfolio: {
-    domains: ALL, requiredDomains: ["market"], evidenceBudget: 35, minQuality: 30,
-    focus: "Answer at the holdings level. Use only the positions supplied with the request.",
+    domains: STOCK_EVIDENCE, requiredDomains: ["market"], evidenceBudget: 50, minQuality: 30,
+    focus: "Answer at the holdings level. Use supplied positions plus validated stock research context; disclose missing evidence.",
   },
   "general-market": {
-    domains: ["market", "news"], requiredDomains: ["market"], evidenceBudget: 35, minQuality: 25,
-    focus: "Answer about the broad market. Do not extrapolate a single stock to the index.",
+    domains: MARKET_NEWS, requiredDomains: ["market"], evidenceBudget: 45, minQuality: 25,
+    focus: "Answer about the broad market using market and news/event evidence. Do not extrapolate a single stock to an index.",
   },
 };
 
