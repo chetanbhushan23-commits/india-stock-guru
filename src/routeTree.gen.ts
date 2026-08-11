@@ -12,6 +12,7 @@ import { Route as ResearchRouteImport } from './routes/research'
 import { Route as EvidenceRouteImport } from './routes/evidence'
 import { Route as CompareRouteImport } from './routes/compare'
 import { Route as PortfolioIntelligenceRouteImport } from './routes/portfolio-intelligence'
+import { Route as ResearchAlertsRouteImport } from './routes/research-alerts'
 const IndexRoute = IndexRouteImport.update({id:'/',path:'/',getParentRoute:()=>rootRouteImport} as any)
 const StockSymbolRoute = StockSymbolRouteImport.update({id:'/stock/$symbol',path:'/stock/$symbol',getParentRoute:()=>rootRouteImport} as any)
 const AiAssistantRoute = AiAssistantRouteImport.update({id:'/ai-assistant',path:'/ai-assistant',getParentRoute:()=>rootRouteImport} as any)
@@ -22,9 +23,10 @@ const ResearchRoute = ResearchRouteImport.update({id:'/research',path:'/research
 const EvidenceRoute = EvidenceRouteImport.update({id:'/evidence',path:'/evidence',getParentRoute:()=>rootRouteImport} as any)
 const CompareRoute = CompareRouteImport.update({id:'/compare',path:'/compare',getParentRoute:()=>rootRouteImport} as any)
 const PortfolioIntelligenceRoute = PortfolioIntelligenceRouteImport.update({id:'/portfolio-intelligence',path:'/portfolio-intelligence',getParentRoute:()=>rootRouteImport} as any)
-export interface FileRoutesByFullPath { '/':typeof IndexRoute; '/stock/$symbol':typeof StockSymbolRoute; '/ai-assistant':typeof AiAssistantRoute; '/stock-chat':typeof StockChatRoute; '/stock-chat/$symbol':typeof StockChatSymbolRoute; '/research-history':typeof ResearchHistoryRoute; '/research':typeof ResearchRoute; '/evidence':typeof EvidenceRoute; '/compare':typeof CompareRoute; '/portfolio-intelligence':typeof PortfolioIntelligenceRoute }
+const ResearchAlertsRoute = ResearchAlertsRouteImport.update({id:'/research-alerts',path:'/research-alerts',getParentRoute:()=>rootRouteImport} as any)
+export interface FileRoutesByFullPath { '/':typeof IndexRoute; '/stock/$symbol':typeof StockSymbolRoute; '/ai-assistant':typeof AiAssistantRoute; '/stock-chat':typeof StockChatRoute; '/stock-chat/$symbol':typeof StockChatSymbolRoute; '/research-history':typeof ResearchHistoryRoute; '/research':typeof ResearchRoute; '/evidence':typeof EvidenceRoute; '/compare':typeof CompareRoute; '/portfolio-intelligence':typeof PortfolioIntelligenceRoute; '/research-alerts':typeof ResearchAlertsRoute }
 export interface FileRoutesByTo extends FileRoutesByFullPath {}
-export interface FileRouteTypes { fileRoutesByFullPath:FileRoutesByFullPath; fullPaths:'/'|'/stock/$symbol'|'/ai-assistant'|'/stock-chat'|'/stock-chat/$symbol'|'/research-history'|'/research'|'/evidence'|'/compare'|'/portfolio-intelligence'; fileRoutesByTo:FileRoutesByTo; to:FileRouteTypes['fullPaths']; id:'__root__'|FileRouteTypes['fullPaths']; fileRoutesById:FileRoutesByFullPath }
-declare module '@tanstack/react-router' { interface FileRoutesByPath { '/portfolio-intelligence':{id:'/portfolio-intelligence';path:'/portfolio-intelligence';fullPath:'/portfolio-intelligence';preLoaderRoute:typeof PortfolioIntelligenceRouteImport;parentRoute:typeof rootRouteImport} } }
-const rootRouteChildren = { IndexRoute, StockSymbolRoute, AiAssistantRoute, StockChatRoute, StockChatSymbolRoute, ResearchHistoryRoute, ResearchRoute, EvidenceRoute, CompareRoute, PortfolioIntelligenceRoute }
+export interface FileRouteTypes { fileRoutesByFullPath:FileRoutesByFullPath; fullPaths:'/'|'/stock/$symbol'|'/ai-assistant'|'/stock-chat'|'/stock-chat/$symbol'|'/research-history'|'/research'|'/evidence'|'/compare'|'/portfolio-intelligence'|'/research-alerts'; fileRoutesByTo:FileRoutesByTo; to:FileRouteTypes['fullPaths']; id:'__root__'|FileRouteTypes['fullPaths']; fileRoutesById:FileRoutesByFullPath }
+declare module '@tanstack/react-router' { interface FileRoutesByPath { '/research-alerts':{id:'/research-alerts';path:'/research-alerts';fullPath:'/research-alerts';preLoaderRoute:typeof ResearchAlertsRouteImport;parentRoute:typeof rootRouteImport} } }
+const rootRouteChildren = { IndexRoute, StockSymbolRoute, AiAssistantRoute, StockChatRoute, StockChatSymbolRoute, ResearchHistoryRoute, ResearchRoute, EvidenceRoute, CompareRoute, PortfolioIntelligenceRoute, ResearchAlertsRoute }
 export const routeTree = rootRouteImport._addFileChildren(rootRouteChildren)._addFileTypes<FileRouteTypes>()
