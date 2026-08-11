@@ -1,3 +1,4 @@
+import "@/styles/ai-chat-responsive.css";
 import { createFileRoute } from "@tanstack/react-router";
 import { AiChatInterface } from "@/components/ai/AiChatInterface";
 
