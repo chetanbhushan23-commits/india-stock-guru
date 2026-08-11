@@ -10,6 +10,7 @@ import { Route as StockChatSymbolRouteImport } from './routes/stock-chat.$symbol
 import { Route as ResearchHistoryRouteImport } from './routes/research-history'
 import { Route as ResearchRouteImport } from './routes/research'
 import { Route as EvidenceRouteImport } from './routes/evidence'
+import { Route as CompareRouteImport } from './routes/compare'
 const IndexRoute = IndexRouteImport.update({id:'/',path:'/',getParentRoute:()=>rootRouteImport} as any)
 const StockSymbolRoute = StockSymbolRouteImport.update({id:'/stock/$symbol',path:'/stock/$symbol',getParentRoute:()=>rootRouteImport} as any)
 const AiAssistantRoute = AiAssistantRouteImport.update({id:'/ai-assistant',path:'/ai-assistant',getParentRoute:()=>rootRouteImport} as any)
@@ -18,10 +19,10 @@ const StockChatSymbolRoute = StockChatSymbolRouteImport.update({id:'/stock-chat/
 const ResearchHistoryRoute = ResearchHistoryRouteImport.update({id:'/research-history',path:'/research-history',getParentRoute:()=>rootRouteImport} as any)
 const ResearchRoute = ResearchRouteImport.update({id:'/research',path:'/research',getParentRoute:()=>rootRouteImport} as any)
 const EvidenceRoute = EvidenceRouteImport.update({id:'/evidence',path:'/evidence',getParentRoute:()=>rootRouteImport} as any)
-export interface FileRoutesByFullPath { '/':typeof IndexRoute; '/stock/$symbol':typeof StockSymbolRoute; '/ai-assistant':typeof AiAssistantRoute; '/stock-chat':typeof StockChatRoute; '/stock-chat/$symbol':typeof StockChatSymbolRoute; '/research-history':typeof ResearchHistoryRoute; '/research':typeof ResearchRoute; '/evidence':typeof EvidenceRoute }
+const CompareRoute = CompareRouteImport.update({id:'/compare',path:'/compare',getParentRoute:()=>rootRouteImport} as any)
+export interface FileRoutesByFullPath { '/':typeof IndexRoute; '/stock/$symbol':typeof StockSymbolRoute; '/ai-assistant':typeof AiAssistantRoute; '/stock-chat':typeof StockChatRoute; '/stock-chat/$symbol':typeof StockChatSymbolRoute; '/research-history':typeof ResearchHistoryRoute; '/research':typeof ResearchRoute; '/evidence':typeof EvidenceRoute; '/compare':typeof CompareRoute }
 export interface FileRoutesByTo extends FileRoutesByFullPath {}
-export interface FileRoutesById { __root__:typeof rootRouteImport; '/':typeof IndexRoute; '/stock/$symbol':typeof StockSymbolRoute; '/ai-assistant':typeof AiAssistantRoute; '/stock-chat':typeof StockChatRoute; '/stock-chat/$symbol':typeof StockChatSymbolRoute; '/research-history':typeof ResearchHistoryRoute; '/research':typeof ResearchRoute; '/evidence':typeof EvidenceRoute }
-export interface FileRouteTypes { fileRoutesByFullPath:FileRoutesByFullPath; fullPaths:'/'|'/stock/$symbol'|'/ai-assistant'|'/stock-chat'|'/stock-chat/$symbol'|'/research-history'|'/research'|'/evidence'; fileRoutesByTo:FileRoutesByTo; to:FileRouteTypes['fullPaths']; id:'__root__'|FileRouteTypes['fullPaths']; fileRoutesById:FileRoutesById }
-declare module '@tanstack/react-router' { interface FileRoutesByPath { '/evidence':{id:'/evidence';path:'/evidence';fullPath:'/evidence';preLoaderRoute:typeof EvidenceRouteImport;parentRoute:typeof rootRouteImport} } }
-const rootRouteChildren = { IndexRoute, StockSymbolRoute, AiAssistantRoute, StockChatRoute, StockChatSymbolRoute, ResearchHistoryRoute, ResearchRoute, EvidenceRoute }
+export interface FileRouteTypes { fileRoutesByFullPath:FileRoutesByFullPath; fullPaths:'/'|'/stock/$symbol'|'/ai-assistant'|'/stock-chat'|'/stock-chat/$symbol'|'/research-history'|'/research'|'/evidence'|'/compare'; fileRoutesByTo:FileRoutesByTo; to:FileRouteTypes['fullPaths']; id:'__root__'|FileRouteTypes['fullPaths']; fileRoutesById:FileRoutesByFullPath }
+declare module '@tanstack/react-router' { interface FileRoutesByPath { '/compare':{id:'/compare';path:'/compare';fullPath:'/compare';preLoaderRoute:typeof CompareRouteImport;parentRoute:typeof rootRouteImport} } }
+const rootRouteChildren = { IndexRoute, StockSymbolRoute, AiAssistantRoute, StockChatRoute, StockChatSymbolRoute, ResearchHistoryRoute, ResearchRoute, EvidenceRoute, CompareRoute }
 export const routeTree = rootRouteImport._addFileChildren(rootRouteChildren)._addFileTypes<FileRouteTypes>()
