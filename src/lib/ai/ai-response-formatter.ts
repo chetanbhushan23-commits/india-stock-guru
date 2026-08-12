@@ -122,13 +122,11 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
   const symbols = contexts.map((context) => context.symbol);
   const modelSaysInsufficient = raw["insufficient"] === true;
   const modelSummary = asString(raw["summary"]);
-
-  // A transient network/provider phrase is not a market conclusion. If the
-  // model accidentally emits it inside otherwise valid structured JSON, never
-  // show it to the user as the Executive Summary. Prefer the deterministic,
-  // evidence-backed trend synthesis already built from the research context.
   const genericTrendFailure = isGenericTrendFailure(modelSummary);
   const transientFetchFailure = isTransientFetchSummary(modelSummary);
+
+  // A transient network/provider phrase is never a market conclusion. Prefer
+  // the deterministic evidence-backed trend synthesis whenever it exists.
   const summary = fallback && (modelSaysInsufficient || genericTrendFailure || transientFetchFailure)
     ? fallback.summary
     : modelSummary;
@@ -139,27 +137,23 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
     : [];
   const missingInformation = [...new Set([...modelMissing, ...gapNotes])];
 
-  if (allClaims.length === 0 || !summary || transientFetchFailure) {
+  // If a transient fetch phrase is all the model gave us, refuse that phrase
+  // only when there is no deterministic evidence-backed fallback available.
+  if (allClaims.length === 0 || !summary || (transientFetchFailure && !fallback)) {
+    const reason = transientFetchFailure
+      ? "The AI provider returned a transient fetch/network message instead of an evidence-backed answer."
+      : allClaims.length === 0
+        ? "The model produced no evidence-backed statements."
+        : "The available evidence did not produce a usable summary.";
     return {
       ...insufficientAnswer({
         intent: params.intent,
         question: params.question,
         symbols,
-        reason: transientFetchFailure
-          ? "The AI provider returned a transient fetch/network message instead of an evidence-backed answer."
-          : allClaims.length === 0
-            ? "The model produced no evidence-backed statements."
-            : "The available evidence did not produce a usable summary.",
+        reason,
         providerId: params.providerId,
       }),
-      missingInformation: [...new Set([
-        transientFetchFailure
-          ? "The AI provider returned a transient fetch/network message instead of an evidence-backed answer."
-          : allClaims.length === 0
-            ? "The model produced no evidence-backed statements."
-            : "The available evidence did not produce a usable summary.",
-        ...missingInformation,
-      ])],
+      missingInformation: [...new Set([reason, ...missingInformation])],
       model: params.model,
       droppedClaims: dropped.count,
     };
