@@ -11,6 +11,7 @@ import type { ResearchCollector, CollectorOutput } from "./research-collector";
 import { emptyOutput, toIso } from "./research-collector";
 import { mapFundamental, mapMarketQuote, mapNews, mapTechnical } from "./research-evidence";
 import { analyzeCandles } from "./technical-analysis";
+import { fetchYahooHistoryFallback } from "./yahoo-history-fallback.server";
 
 const failure = (error: unknown, fallback: string): CollectorOutput =>
   emptyOutput(error instanceof Error ? error.message : fallback, false);
@@ -47,10 +48,29 @@ export const technicalCollector: ResearchCollector = {
   async collect(request) {
     try {
       const { providerHistory } = await import("./market-data.server");
-      const candles = await providerHistory(request.symbol, request.interval, request.range);
-      const result = analyzeCandles(request.symbol, candles, request.interval, request.range);
-      if (!result.ok) return emptyOutput(result.error.message);
-      const mapped = mapTechnical(result.data);
+      let candles = await providerHistory(request.symbol, request.interval, request.range);
+      let analysis = analyzeCandles(request.symbol, candles, request.interval, request.range);
+
+      // Yahoo's chart endpoint can intermittently return an empty/short history
+      // even while quote/search endpoints are working. Do not let that erase
+      // the entire technical domain. Retry through independent Yahoo chart
+      // hosts with an expanded lookback so EMA/RSI/MACD/ADX can be computed.
+      if (!analysis.ok) {
+        const fallbackRange = request.interval === "1d"
+          ? (request.range === "1mo" || request.range === "3mo" ? "1y" : request.range)
+          : request.interval === "1wk"
+            ? (request.range === "1mo" || request.range === "3mo" ? "2y" : request.range)
+            : (request.range === "1mo" || request.range === "3mo" || request.range === "6mo" ? "5y" : request.range);
+        candles = await fetchYahooHistoryFallback(request.symbol, request.interval, fallbackRange);
+        analysis = analyzeCandles(request.symbol, candles, request.interval, fallbackRange);
+      }
+
+      if (!analysis.ok) {
+        return emptyOutput(
+          `Technical history unavailable for ${request.symbol}: ${analysis.error.message}`,
+        );
+      }
+      const mapped = mapTechnical(analysis.data);
       return { ...mapped, ok: true, message: null };
     } catch (error) {
       return failure(error, "Technical analysis collector failed.");
