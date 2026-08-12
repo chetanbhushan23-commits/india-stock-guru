@@ -1,14 +1,8 @@
-/**
- * Server-side ResearchCollector implementations.
- *
- * Each collector calls exactly one existing engine and never mutates it.
- * To move onto FastAPI, swap the engine import inside a collector for a
- * `fetch` to the corresponding endpoint — `CollectorOutput` stays the same.
- */
+/** Server-side ResearchCollector implementations. */
 
 import { exchangeOf, stripSuffix } from "./market-types";
 import type { ResearchCollector, CollectorOutput } from "./research-collector";
-import { emptyOutput, toIso } from "./research-collector";
+import { emptyOutput, makeEvidence, textValue, toIso } from "./research-collector";
 import { mapFundamental, mapMarketQuote, mapNews, mapTechnical } from "./research-evidence";
 import { analyzeCandles } from "./technical-analysis";
 import type { Range } from "./technical-types";
@@ -29,11 +23,7 @@ export const marketCollector: ResearchCollector = {
       const mapped = mapMarketQuote(quote, new Date().toISOString());
       return {
         ...mapped,
-        identity: {
-          companyName: quote.name,
-          currency: quote.currency,
-          exchange: exchangeOf(quote.symbol),
-        },
+        identity: { companyName: quote.name, currency: quote.currency, exchange: exchangeOf(quote.symbol) },
         ok: true,
         message: null,
       };
@@ -49,23 +39,9 @@ export const technicalCollector: ResearchCollector = {
   async collect(request) {
     try {
       const { providerHistory } = await import("./market-data.server");
-
-      // A network failure from the primary Yahoo history request must NOT abort
-      // the technical collector. Treat it exactly like an empty history and
-      // continue through the independent fallback path below.
       let candles = [] as Awaited<ReturnType<typeof providerHistory>>;
-      try {
-        candles = await providerHistory(request.symbol, request.interval, request.range);
-      } catch {
-        candles = [];
-      }
-
+      try { candles = await providerHistory(request.symbol, request.interval, request.range); } catch { candles = []; }
       let analysis = analyzeCandles(request.symbol, candles, request.interval, request.range);
-
-      // Yahoo's chart endpoint can intermittently return an empty/short history
-      // even while quote/search endpoints are working. Do not let that erase
-      // the entire technical domain. Retry through independent Yahoo chart
-      // hosts with an expanded lookback so EMA/RSI/MACD/ADX can be computed.
       if (!analysis.ok) {
         const fallbackRange: Range = request.interval === "1d"
           ? (request.range === "1mo" || request.range === "3mo" ? "1y" : request.range)
@@ -75,12 +51,7 @@ export const technicalCollector: ResearchCollector = {
         candles = await fetchYahooHistoryFallback(request.symbol, request.interval, fallbackRange);
         analysis = analyzeCandles(request.symbol, candles, request.interval, fallbackRange);
       }
-
-      if (!analysis.ok) {
-        return emptyOutput(
-          `Technical history unavailable for ${request.symbol}: ${analysis.error.message}`,
-        );
-      }
+      if (!analysis.ok) return emptyOutput(`Technical history unavailable for ${request.symbol}: ${analysis.error.message}`);
       const mapped = mapTechnical(analysis.data);
       return { ...mapped, ok: true, message: null };
     } catch (error) {
@@ -95,19 +66,12 @@ export const fundamentalCollector: ResearchCollector = {
   async collect(request) {
     try {
       const { runFundamentalAnalysis } = await import("./fundamental-service.server");
-      const result = await runFundamentalAnalysis(
-        request.symbol,
-        request.quarters,
-        request.years,
-      );
+      const result = await runFundamentalAnalysis(request.symbol, request.quarters, request.years);
       if (!result.ok) return emptyOutput(result.error.message);
       const mapped = mapFundamental(result.data);
       return {
         ...mapped,
-        identity: {
-          companyName: result.data.profile.name,
-          currency: result.data.profile.currency,
-        },
+        identity: { companyName: result.data.profile.name, currency: result.data.profile.currency },
         ok: true,
         message: null,
       };
@@ -123,29 +87,150 @@ export const newsCollector: ResearchCollector = {
   async collect(request) {
     try {
       const { aggregateNews } = await import("./news-aggregation.server");
-      const result = await aggregateNews({
-        symbol: request.symbol,
-        query: null,
-        limit: request.newsLimit,
-        sinceDays: request.newsSinceDays,
-      });
+      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: request.newsLimit, sinceDays: request.newsSinceDays });
       if (!result.ok) return emptyOutput(result.error.message);
       const mapped = mapNews(result.data);
       const named = result.data.articles.find((article) => article.company.name);
       return {
         ...mapped,
-        identity: {
-          companyName: named?.company.name ?? null,
-          exchange: named?.company.exchange ?? null,
-        },
+        identity: { companyName: named?.company.name ?? null, exchange: named?.company.exchange ?? null },
         ok: mapped.evidence.length > 0,
-        message:
-          mapped.evidence.length > 0
-            ? null
-            : `No news items for ${request.symbol} in the last ${request.newsSinceDays} days.`,
+        message: mapped.evidence.length > 0 ? null : `No news items for ${request.symbol} in the last ${request.newsSinceDays} days.`,
       };
     } catch (error) {
       return failure(error, "News intelligence collector failed.");
+    }
+  },
+};
+
+/**
+ * Corporate-action collector. It deliberately reuses the exchange-aware news
+ * aggregation layer because that layer already combines NSE/BSE filings and
+ * normalises dividend/bonus/split/rights/buyback/merger records. A successful
+ * empty feed is represented as a bounded coverage fact, not as fake action data.
+ */
+export const corporateActionCollector: ResearchCollector = {
+  id: "corporate-action-collector",
+  domain: "corporate-action",
+  async collect(request) {
+    try {
+      const { aggregateNews } = await import("./news-aggregation.server");
+      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: Math.max(request.newsLimit, 50), sinceDays: Math.max(request.newsSinceDays, 30) });
+      if (!result.ok) return emptyOutput(result.error.message);
+      const actions = result.data.corporateActions;
+      const out: CollectorOutput = { evidence: [], timeline: [], gaps: [], completeness: 1, ok: true, message: null };
+      const now = result.data.fetchedAt;
+      for (const action of actions) {
+        const observedAt = action.announcedAt ?? action.recordDate ?? action.exDate ?? now;
+        const detail = [action.description, action.ratio ? `Ratio ${action.ratio}` : null, action.value !== null ? `Value ${action.value}` : null].filter(Boolean).join(" · ");
+        out.evidence.push(makeEvidence({
+          domain: "corporate-action",
+          key: `corporate-action.${action.kind}`,
+          discriminator: action.id,
+          label: `${action.kind.replace(/-/g, " ")} action`,
+          value: textValue(detail || `${action.kind} action reported by the exchange feed.`),
+          importance: 95,
+          reliability: Math.max(0.9, action.source.baseReliability),
+          origin: "provider",
+          direction: "neutral",
+          observedAt: toIso(observedAt),
+          url: action.url,
+          note: action.recordDate ? `Record date: ${action.recordDate}` : action.exDate ? `Ex-date: ${action.exDate}` : null,
+          tags: ["corporate-action", action.kind, action.source.kind],
+          sourceId: action.source.id,
+          sourceName: action.source.name,
+        }));
+        if (observedAt) out.timeline.push({
+          id: `timeline:${action.id}`,
+          at: toIso(observedAt) ?? now,
+          domain: "corporate-action",
+          title: `${action.kind.replace(/-/g, " ")} — ${action.company.name ?? request.symbol}`,
+          detail: detail || null,
+          importance: 95,
+          direction: "neutral",
+          sourceId: action.source.id,
+          url: action.url,
+          evidenceIds: [`corporate-action:corporate-action.${action.kind}:${action.id}`],
+        });
+      }
+      if (actions.length === 0) {
+        out.evidence.push(makeEvidence({
+          domain: "corporate-action",
+          key: "corporate-action.feedCoverage",
+          label: "Corporate-action feed coverage",
+          value: textValue(`NSE/BSE corporate-action feeds returned no classified corporate actions for ${request.symbol} in the configured ${Math.max(request.newsSinceDays, 30)}-day window.`),
+          importance: 35,
+          reliability: 0.9,
+          origin: "provider",
+          direction: "neutral",
+          observedAt: now,
+          url: null,
+          tags: ["corporate-action", "coverage"],
+          sourceId: "exchange-action-aggregation",
+          sourceName: "NSE/BSE Corporate Action Aggregator",
+        }));
+      }
+      return out;
+    } catch (error) {
+      return failure(error, "Corporate-action collector failed.");
+    }
+  },
+};
+
+/**
+ * Event collector: exchange/IR classified events such as earnings, board
+ * meetings, orders, ratings, management changes and regulatory notices.
+ */
+export const eventCollector: ResearchCollector = {
+  id: "event-collector",
+  domain: "event",
+  async collect(request) {
+    try {
+      const { aggregateNews } = await import("./news-aggregation.server");
+      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: Math.max(request.newsLimit, 50), sinceDays: Math.max(request.newsSinceDays, 30) });
+      if (!result.ok) return emptyOutput(result.error.message);
+      const events = result.data.events;
+      const out: CollectorOutput = { evidence: [], timeline: [], gaps: [], completeness: 1, ok: true, message: null };
+      const now = result.data.fetchedAt;
+      for (const event of events) {
+        const observedAt = event.announcedAt ?? event.eventDate ?? now;
+        out.evidence.push(makeEvidence({
+          domain: "event",
+          key: `event.${event.type}`,
+          discriminator: event.id,
+          label: `${event.type.replace(/-/g, " ")} event`,
+          value: textValue(event.detail ? `${event.title} · ${event.detail}` : event.title),
+          importance: 85,
+          reliability: Math.max(0.85, event.source.baseReliability),
+          origin: "provider",
+          direction: "neutral",
+          observedAt: toIso(observedAt),
+          url: event.url,
+          tags: ["event", event.type, event.source.kind],
+          sourceId: event.source.id,
+          sourceName: event.source.name,
+        }));
+      }
+      if (events.length === 0) {
+        out.evidence.push(makeEvidence({
+          domain: "event",
+          key: "event.feedCoverage",
+          label: "Event feed coverage",
+          value: textValue(`NSE/BSE/IR event feeds returned no classified company events for ${request.symbol} in the configured ${Math.max(request.newsSinceDays, 30)}-day window.`),
+          importance: 30,
+          reliability: 0.9,
+          origin: "provider",
+          direction: "neutral",
+          observedAt: now,
+          url: null,
+          tags: ["event", "coverage"],
+          sourceId: "event-aggregation",
+          sourceName: "NSE/BSE Event Aggregator",
+        }));
+      }
+      return out;
+    } catch (error) {
+      return failure(error, "Event intelligence collector failed.");
     }
   },
 };
@@ -155,11 +240,10 @@ export const RESEARCH_COLLECTORS: ResearchCollector[] = [
   technicalCollector,
   fundamentalCollector,
   newsCollector,
+  corporateActionCollector,
+  eventCollector,
 ];
 
-export const collectorFor = (domain: string) =>
-  RESEARCH_COLLECTORS.find((collector) => collector.domain === domain) ?? null;
-
+export const collectorFor = (domain: string) => RESEARCH_COLLECTORS.find((collector) => collector.domain === domain) ?? null;
 export const tickerOf = (symbol: string) => stripSuffix(symbol);
-
 export const nowIso = () => toIso(Date.now()) as string;
