@@ -1,0 +1,66 @@
+From 15a07daeafe5aecf1823b7f10d953a9c02af20fa Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.local>
+Date: Wed, 12 Aug 2026 13:39:14 +0000
+Subject: [PATCH] fix(ai): describe range-bound trend instead of saying evidence is insufficient
+
+When every technical/market indicator is neutral (a genuinely flat/consolidating market), addDirectionalEvidence() must not return without a synthesis. This patch surfaces a computed range-bound evidence item using the actual neutral readings and instructs the model to treat that synthesis as a valid complete answer.
+
+---
+ src/lib/ai/ai-prompt.ts            |  2 +-
+ src/lib/ai/directional-evidence.ts | 47 +++++++++++++++++++++++++++++++------
+ 2 files changed, 43 insertions(+), 6 deletions(-)
+
+--- a/src/lib/ai/ai-prompt.ts
++++ b/src/lib/ai/ai-prompt.ts
+@@
+-12. For trend, technical-analysis, swing-trade, movement, rise/fall and buy-or-wait questions, interpret the supplied directional evidence. Do not merely repeat that evidence exists. If technical evidence is present, determine the technical bias from its directional indicators and the supplied technical directional synthesis. If technical evidence is unavailable, state that technical confirmation is unavailable and use any available market directional evidence for a qualified answer.
++12. For trend, technical-analysis, swing-trade, movement, rise/fall and buy-or-wait questions, interpret the supplied directional evidence. Do not merely repeat that evidence exists. If technical evidence is present, determine the technical bias from its directional indicators and the supplied technical directional synthesis. If the directional synthesis itself reports a neutral/range-bound state (tagged "range-bound"), that is a valid, complete answer — describe it as a range-bound or consolidating picture using the specific indicator readings cited in that synthesis (e.g. RSI level, MACD histogram, price vs moving averages), rather than saying evidence is insufficient. Only say technical confirmation is unavailable when no technical or market directional evidence exists in the context at all.
+
+--- a/src/lib/ai/directional-evidence.ts
++++ b/src/lib/ai/directional-evidence.ts
+@@
+-  const technical = context.evidence.filter((item) => item.domain === "technical" && item.direction !== "neutral");
+-  const market = context.evidence.filter((item) => item.domain === "market" && item.direction !== "neutral");
++  const technicalAll = context.evidence.filter((item) => item.domain === "technical" && item.direction);
++  const marketAll = context.evidence.filter((item) => item.domain === "market" && item.direction);
++  const technical = technicalAll.filter((item) => item.direction !== "neutral");
++  const market = marketAll.filter((item) => item.direction !== "neutral");
+@@
+-  if (!candidates.length) return context;
++  if (!candidates.length) {
++    const flatPool = technicalAll.length ? technicalAll : marketAll;
++    if (!flatPool.length) return context;
++    const strongestFlat = [...flatPool]
++      .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
++      .slice(0, 6);
++    const flatEvidenceIds = strongestFlat.map((item) => item.id);
++    const hasTechnical = technicalAll.length > 0;
++    const flatStatement = hasTechnical
++      ? `${context.ticker} shows a range-bound/neutral technical picture: ${strongestFlat.map(valueText).join("; ")}. No indicator is showing a clear bullish or bearish bias right now.`
++      : `${context.ticker} shows a range-bound/neutral market picture: ${strongestFlat.map(valueText).join("; ")}. Technical trend confirmation is not available in the current evidence set.`;
++    const flatSynthesized: ResearchEvidence = {
++      id: `derived:direction:${context.symbol}:${intent}`,
++      domain: "technical",
++      key: "technical.directionalSynthesis",
++      label: hasTechnical ? "Technical directional synthesis" : "Market directional synthesis",
++      value: { kind: "text", value: flatStatement },
++      direction: "neutral",
++      importance: 100,
++      reliability: strongestFlat.length ? Math.max(...strongestFlat.map((item) => item.reliability)) : 0,
++      origin: "computed",
++      sourceId: "evidence-synthesis-engine",
++      sourceName: "Evidence Synthesis Engine",
++      observedAt: strongestFlat.find((item) => item.observedAt)?.observedAt ?? context.builtAt,
++      url: null,
++      note: `Derived only from evidence ids: ${flatEvidenceIds.join(", ")}`,
++      tags: ["technical", "trend", "directional-synthesis", "range-bound"],
++    };
++    return {
++      ...context,
++      evidence: [...context.evidence.filter((item) => item.id !== flatSynthesized.id), flatSynthesized],
++      byDomain: {
++        ...context.byDomain,
++        technical: [...(context.byDomain.technical ?? []).filter((id) => id !== flatSynthesized.id), flatSynthesized.id],
++      },
++    };
++  }
