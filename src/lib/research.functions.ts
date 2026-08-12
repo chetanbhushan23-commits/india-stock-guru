@@ -1,11 +1,4 @@
-/**
- * Research Context API service layer.
- *
- * The only entry point the UI or a future AI reasoning layer should call.
- * Moving to FastAPI means replacing the dynamic import below with a `fetch`;
- * the request/response contracts stay identical, which is also what the
- * OpenAI / Gemini / Ollama adapters will consume in Phase 6.2.
- */
+/** Research Context API service layer. */
 
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
@@ -15,19 +8,24 @@ import {
   type ResearchRequest,
 } from "./research-types";
 
+const RESEARCH_DOMAIN_VALUES = [
+  "market",
+  "technical",
+  "fundamental",
+  "news",
+  "corporate-action",
+  "event",
+] as const;
+
 const researchInput = z.object({
   symbol: z.string().trim().min(1).max(24),
-  domains: z
-    .array(z.enum(["market", "technical", "fundamental", "news"]))
-    .min(1)
-    .max(4)
-    .optional(),
+  domains: z.array(z.enum(RESEARCH_DOMAIN_VALUES)).min(1).max(6).optional(),
   interval: z.enum(["1d", "1wk", "1mo"]).default("1d"),
   range: z.enum(["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"]).default("1y"),
   quarters: z.number().int().min(1).max(40).default(12),
   years: z.number().int().min(1).max(20).default(10),
   newsLimit: z.number().int().min(5).max(100).default(30),
-  newsSinceDays: z.number().int().min(1).max(90).default(14),
+  newsSinceDays: z.number().int().min(1).max(90).default(30),
 });
 
 export type ResearchContextInput = z.input<typeof researchInput>;
@@ -54,8 +52,7 @@ export const getResearchContext = createServerFn({ method: "GET" })
         error: {
           code: "COLLECTOR_ERROR",
           symbol: data.symbol,
-          message:
-            error instanceof Error ? error.message : "Research context service failed.",
+          message: error instanceof Error ? error.message : "Research context service failed.",
           coverage: [],
         },
       };
