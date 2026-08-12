@@ -116,7 +116,10 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
   const symbols = contexts.map((context) => context.symbol);
   const modelSaysInsufficient = raw["insufficient"] === true;
   const modelSummary = asString(raw["summary"]);
-  const summary = modelSummary && !modelSaysInsufficient ? modelSummary : fallback?.summary ?? modelSummary;
+  const genericTrendFailure = /does not contain enough directional evidence|not enough directional evidence|insufficient.*directional evidence/i.test(modelSummary);
+  const summary = fallback && (modelSaysInsufficient || genericTrendFailure)
+    ? fallback.summary
+    : modelSummary;
 
   const gapNotes = contexts.flatMap((context) => context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`));
   const modelMissing = Array.isArray(raw["missingInformation"])
