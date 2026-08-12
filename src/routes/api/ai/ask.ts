@@ -18,6 +18,8 @@ const requestSchema = z.object({
 export const Route = createFileRoute("/api/ai/ask")({
   server: {
     handlers: {
+      GET: async () =>
+        Response.json({ ok: true, service: "ChetanMarkets AI Q&A", transport: "http", status: "ready" }),
       POST: async ({ request }) => {
         try {
           const body = await request.json();
