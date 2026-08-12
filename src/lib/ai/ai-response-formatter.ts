@@ -97,6 +97,12 @@ function trendFallback(contexts: AISelectedContext[], intent: AIIntent): { summa
   return { summary, evidence: [mainClaim], technicalEvidence: [mainClaim, ...supportClaims] };
 }
 
+const isTransientFetchSummary = (summary: string): boolean =>
+  /^(failed to fetch|failed fetching|network error|network request failed|request failed|unable to fetch|fetch failed)[.!]?$/i.test(summary.trim());
+
+const isGenericTrendFailure = (summary: string): boolean =>
+  /does not contain enough directional evidence|not enough directional evidence|insufficient.*directional evidence/i.test(summary);
+
 export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; question: string; contexts: AISelectedContext[]; providerId: string; model: string | null }): AIAnswer {
   const { raw, contexts } = params;
   const knownIds = new Set(contexts.flatMap((context) => context.evidence.map((item) => item.id)));
@@ -116,8 +122,14 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
   const symbols = contexts.map((context) => context.symbol);
   const modelSaysInsufficient = raw["insufficient"] === true;
   const modelSummary = asString(raw["summary"]);
-  const genericTrendFailure = /does not contain enough directional evidence|not enough directional evidence|insufficient.*directional evidence/i.test(modelSummary);
-  const summary = fallback && (modelSaysInsufficient || genericTrendFailure)
+
+  // A transient network/provider phrase is not a market conclusion. If the
+  // model accidentally emits it inside otherwise valid structured JSON, never
+  // show it to the user as the Executive Summary. Prefer the deterministic,
+  // evidence-backed trend synthesis already built from the research context.
+  const genericTrendFailure = isGenericTrendFailure(modelSummary);
+  const transientFetchFailure = isTransientFetchSummary(modelSummary);
+  const summary = fallback && (modelSaysInsufficient || genericTrendFailure || transientFetchFailure)
     ? fallback.summary
     : modelSummary;
 
@@ -127,16 +139,27 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
     : [];
   const missingInformation = [...new Set([...modelMissing, ...gapNotes])];
 
-  if (allClaims.length === 0 || !summary) {
+  if (allClaims.length === 0 || !summary || transientFetchFailure) {
     return {
       ...insufficientAnswer({
         intent: params.intent,
         question: params.question,
         symbols,
-        reason: allClaims.length === 0 ? "The model produced no evidence-backed statements." : "The available evidence did not produce a usable summary.",
+        reason: transientFetchFailure
+          ? "The AI provider returned a transient fetch/network message instead of an evidence-backed answer."
+          : allClaims.length === 0
+            ? "The model produced no evidence-backed statements."
+            : "The available evidence did not produce a usable summary.",
         providerId: params.providerId,
       }),
-      missingInformation: [...new Set([allClaims.length === 0 ? "The model produced no evidence-backed statements." : "The available evidence did not produce a usable summary.", ...missingInformation])],
+      missingInformation: [...new Set([
+        transientFetchFailure
+          ? "The AI provider returned a transient fetch/network message instead of an evidence-backed answer."
+          : allClaims.length === 0
+            ? "The model produced no evidence-backed statements."
+            : "The available evidence did not produce a usable summary.",
+        ...missingInformation,
+      ])],
       model: params.model,
       droppedClaims: dropped.count,
     };
