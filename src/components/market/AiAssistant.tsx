@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bot, Send, Sparkles } from "lucide-react";
+import { Bot, Loader2, Send, Sparkles } from "lucide-react";
 import { askAI } from "@/lib/ai.functions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,9 +44,10 @@ export function AiAssistant({ activeSymbol }: { activeSymbol: string }) {
         </div>
         {confidence !== null && <Badge variant={confidence >= 75 ? "default" : "secondary"}>Confidence {confidence}/100</Badge>}
       </div>
-      <div className="mt-3 flex min-w-0 gap-2"><Input value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void ask(); }} placeholder={`Ask about ${activeSymbol}…`} className="min-w-0 flex-1" aria-label="Ask ChetanMarkets AI about this stock" /><Button size="icon" onClick={() => void ask()} disabled={loading || !question.trim()} aria-label="Ask ChetanMarkets AI"><Send className="h-4 w-4" /></Button></div>
-      {!summary && <div className="mt-3 space-y-2"><p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Suggested</p><div className="grid gap-2">{prompts.map((prompt) => <button key={prompt} type="button" onClick={() => void ask(prompt)} className="w-full min-w-0 rounded-lg border border-border/70 bg-surface-2/50 px-3 py-2 text-left text-xs leading-5 transition hover:border-primary/40 hover:bg-surface-2"><span className="mr-1 inline-flex align-middle text-primary"><Sparkles className="h-3 w-3" /></span><span className="break-words">{prompt}</span></button>)}</div></div>}
-      {summary && <div className="mt-3 min-w-0 rounded-xl border border-border/70 bg-surface-2/40 p-3"><p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-primary">Executive Summary</p><p className="whitespace-pre-wrap break-words text-xs leading-5 text-foreground/90">{loading ? "Researching…" : summary}</p><p className="mt-2 text-[10px] text-muted-foreground">Open ChetanMarkets AI for the full evidence, sources, risks and timeline.</p></div>}
+      <div className="mt-3 flex min-w-0 gap-2"><Input value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void ask(); }} disabled={loading} placeholder={`Ask about ${activeSymbol}…`} className="min-w-0 flex-1" aria-label="Ask ChetanMarkets AI about this stock" /><Button size="icon" onClick={() => void ask()} disabled={loading || !question.trim()} aria-label="Ask ChetanMarkets AI">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button></div>
+      {loading && <div className="mt-3 flex min-w-0 items-center gap-2 rounded-xl border border-border/70 bg-surface-2/40 p-3 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" /><span>Researching {activeSymbol}… gathering evidence and generating an answer.</span></div>}
+      {!loading && !summary && <div className="mt-3 space-y-2"><p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Suggested</p><div className="grid gap-2">{prompts.map((prompt) => <button key={prompt} type="button" onClick={() => void ask(prompt)} className="w-full min-w-0 rounded-lg border border-border/70 bg-surface-2/50 px-3 py-2 text-left text-xs leading-5 transition hover:border-primary/40 hover:bg-surface-2"><span className="mr-1 inline-flex align-middle text-primary"><Sparkles className="h-3 w-3" /></span><span className="break-words">{prompt}</span></button>)}</div></div>}
+      {!loading && summary && <div className="mt-3 min-w-0 rounded-xl border border-border/70 bg-surface-2/40 p-3"><p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-primary">Executive Summary</p><p className="whitespace-pre-wrap break-words text-xs leading-5 text-foreground/90">{summary}</p><p className="mt-2 text-[10px] text-muted-foreground">Open ChetanMarkets AI for the full evidence, sources, risks and timeline.</p></div>}
     </Card>
   );
 }
