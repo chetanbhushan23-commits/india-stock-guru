@@ -1,12 +1,14 @@
 /**
  * AIReasoningEngine (server-only).
  *
- * Pipeline: route → resolve symbols when needed → build ResearchContext(s) →
- * select evidence → add derived directional evidence → prompt a provider →
- * format + validate the answer.
+ * Pipeline: route → resolve symbols → build ResearchContext(s) → enrich
+ * directional evidence from the FULL context → select evidence → prompt a
+ * provider → format + validate the answer.
  *
- * The engine consumes ResearchContext objects for evidence. Symbol discovery
- * is delegated to the research service and never accesses market providers here.
+ * Important: directional synthesis must happen before evidence budgeting and
+ * before the hard requirements gate. Otherwise a valid technical signal can
+ * be dropped by the selector and the Q&A repeatedly falls into the generic
+ * "insufficient evidence" response.
  */
 
 import { routeQuestion } from "./ai-question-router";
@@ -17,11 +19,7 @@ import { formatAnswer, insufficientAnswer, parseModelJson } from "./ai-response-
 import { resolveProvider } from "./providers/registry.server";
 import { resolveResearchSymbols, runResearchContext } from "../research-context.server";
 import type { ResearchContext, ResearchDomain, ResearchRequest } from "../research-types";
-import type {
-  AIReasoningRequest,
-  AIReasoningResult,
-  AISelectedContext,
-} from "./ai-types";
+import type { AIReasoningRequest, AIReasoningResult, AISelectedContext } from "./ai-types";
 
 const researchRequestFor = (symbol: string, domains: ResearchDomain[]): ResearchRequest => ({
   symbol,
@@ -40,7 +38,40 @@ export async function reasonOverContexts(
 ): Promise<AIReasoningResult> {
   const { plan } = routeQuestion(request.question, request.symbols ?? []);
   const provider = resolveProvider(request.provider);
-  const selected: AISelectedContext[] = contexts.map((context) =>
+
+  // MUST enrich before selectContext(). The derived synthesis has high
+  // importance and therefore survives the evidence budget. More importantly,
+  // it makes a real technical trend visible to meetsRequirements().
+  const enrichedContexts = contexts.map((context) =>
+    addDirectionalEvidence(
+      {
+        symbol: context.symbol,
+        ticker: context.ticker,
+        companyName: context.companyName,
+        exchange: context.exchange,
+        currency: context.currency,
+        builtAt: context.builtAt,
+        evidence: context.evidence,
+        timeline: context.timeline,
+        conflicts: context.conflicts,
+        gaps: context.gaps,
+        coverage: context.coverage,
+        quality: context.quality,
+        byDomain: {
+          market: context.evidence.filter((item) => item.domain === "market").map((item) => item.id),
+          technical: context.evidence.filter((item) => item.domain === "technical").map((item) => item.id),
+          fundamental: context.evidence.filter((item) => item.domain === "fundamental").map((item) => item.id),
+          news: context.evidence.filter((item) => item.domain === "news").map((item) => item.id),
+          "corporate-action": context.evidence.filter((item) => item.domain === "corporate-action").map((item) => item.id),
+          event: context.evidence.filter((item) => item.domain === "event").map((item) => item.id),
+        },
+        droppedIds: [],
+      },
+      plan.intent,
+    ),
+  );
+
+  const selected: AISelectedContext[] = enrichedContexts.map((context) =>
     addDirectionalEvidence(selectContext(context, plan), plan.intent),
   );
 
@@ -55,9 +86,7 @@ export async function reasonOverContexts(
         symbols: selected.map((context) => context.symbol),
         reason: gate.reason ?? partialGate.reason ?? "The evidence set does not meet this question's requirements.",
         providerId: provider.id,
-        missing: selected.flatMap((context) =>
-          context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`),
-        ),
+        missing: selected.flatMap((context) => context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`)),
       }),
     };
   }
@@ -101,27 +130,13 @@ export async function reasonOverContexts(
 
   return {
     ok: true,
-    data: formatAnswer({
-      raw: parsed,
-      intent: plan.intent,
-      question: request.question,
-      contexts: selected,
-      providerId: provider.id,
-      model,
-    }),
+    data: formatAnswer({ raw: parsed, intent: plan.intent, question: request.question, contexts: selected, providerId: provider.id, model }),
   };
 }
 
-export async function runAIReasoning(
-  request: AIReasoningRequest,
-): Promise<AIReasoningResult> {
+export async function runAIReasoning(request: AIReasoningRequest): Promise<AIReasoningResult> {
   const question = request.question.trim();
-  if (!question) {
-    return {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "The question is empty.", intent: null, symbols: [] },
-    };
-  }
+  if (!question) return { ok: false, error: { code: "INVALID_REQUEST", message: "The question is empty.", intent: null, symbols: [] } };
 
   let { plan } = routeQuestion(question, request.symbols ?? []);
   let resolvedSymbols = plan.symbols;
@@ -146,9 +161,7 @@ export async function runAIReasoning(
   }
 
   const results = await Promise.all(
-    plan.symbols
-      .slice(0, plan.multiSymbol ? 4 : 1)
-      .map((symbol) => runResearchContext(researchRequestFor(symbol, plan.domains))),
+    plan.symbols.slice(0, plan.multiSymbol ? 4 : 1).map((symbol) => runResearchContext(researchRequestFor(symbol, plan.domains))),
   );
 
   const contexts = results.flatMap((result) => (result.ok ? [result.data] : []));
