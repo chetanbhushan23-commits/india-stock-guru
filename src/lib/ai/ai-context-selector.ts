@@ -1,26 +1,12 @@
 /**
  * AIContextSelector — narrows a ResearchContext down to the evidence the
- * routed intent actually needs, within a hard budget.
- *
- * Pure and deterministic: same context + same plan ⇒ same selection. It only
- * ever removes items, never fabricates or rewrites them.
+ * routed intent actually needs, while preserving cross-domain coverage.
  */
 
 import type { AIRoutePlan, AISelectedContext, AISource } from "./ai-types";
-import type {
-  ResearchContext,
-  ResearchDomain,
-  ResearchEvidence,
-} from "../research-types";
+import type { ResearchContext, ResearchDomain, ResearchEvidence } from "../research-types";
 
-const DOMAIN_KEYS: ResearchDomain[] = [
-  "market",
-  "technical",
-  "fundamental",
-  "news",
-  "corporate-action",
-  "event",
-];
+const DOMAIN_KEYS: ResearchDomain[] = ["market", "technical", "fundamental", "news", "corporate-action", "event"];
 
 const DOMAIN_BIAS: Partial<Record<AIRoutePlan["intent"], Partial<Record<ResearchDomain, number>>>> = {
   "technical-analysis": { technical: 25, market: 8 },
@@ -50,23 +36,39 @@ const freshnessBoost = (observedAt: string | null): number => {
 };
 
 const score = (evidence: ResearchEvidence, plan: AIRoutePlan): number =>
-  evidence.importance +
-  (DOMAIN_BIAS[plan.intent]?.[evidence.domain] ?? 0) +
-  evidence.reliability * 10 +
-  freshnessBoost(evidence.observedAt);
+  evidence.importance + (DOMAIN_BIAS[plan.intent]?.[evidence.domain] ?? 0) + evidence.reliability * 10 + freshnessBoost(evidence.observedAt);
 
-export function selectContext(
-  context: ResearchContext,
-  plan: AIRoutePlan,
-): AISelectedContext {
+/**
+ * Keep the best item from every populated domain first, then spend the
+ * remaining evidence budget on intent-ranked items. This prevents a strong
+ * technical domain from crowding corporate actions/news/fundamentals out of
+ * the answer tabs.
+ */
+function selectWithDomainFloor(ranked: ResearchEvidence[], budget: number): ResearchEvidence[] {
+  const selected: ResearchEvidence[] = [];
+  const selectedIds = new Set<string>();
+  for (const domain of DOMAIN_KEYS) {
+    const first = ranked.find((item) => item.domain === domain);
+    if (first && selected.length < budget) {
+      selected.push(first);
+      selectedIds.add(first.id);
+    }
+  }
+  for (const item of ranked) {
+    if (selected.length >= budget) break;
+    if (selectedIds.has(item.id)) continue;
+    selected.push(item);
+    selectedIds.add(item.id);
+  }
+  return selected;
+}
+
+export function selectContext(context: ResearchContext, plan: AIRoutePlan): AISelectedContext {
   const ranked = [...context.evidence].sort((a, b) => score(b, plan) - score(a, plan));
-  const kept = ranked.slice(0, plan.evidenceBudget);
+  const kept = selectWithDomainFloor(ranked, Math.max(plan.evidenceBudget, DOMAIN_KEYS.length));
   const keptIds = new Set(kept.map((item) => item.id));
 
-  const byDomain = Object.fromEntries(DOMAIN_KEYS.map((key) => [key, [] as string[]])) as Record<
-    ResearchDomain,
-    string[]
-  >;
+  const byDomain = Object.fromEntries(DOMAIN_KEYS.map((key) => [key, [] as string[]])) as Record<ResearchDomain, string[]>;
   for (const item of kept) byDomain[item.domain].push(item.id);
 
   return {
@@ -77,24 +79,17 @@ export function selectContext(
     currency: context.currency,
     builtAt: context.builtAt,
     evidence: kept,
-    timeline: context.timeline.entries.filter(
-      (entry) => entry.evidenceIds.length === 0 || entry.evidenceIds.some((id) => keptIds.has(id)),
-    ),
-    conflicts: context.conflicts.filter((conflict) =>
-      conflict.evidenceIds.some((id) => keptIds.has(id)),
-    ),
+    timeline: context.timeline.entries.filter((entry) => entry.evidenceIds.length === 0 || entry.evidenceIds.some((id) => keptIds.has(id))),
+    conflicts: context.conflicts.filter((conflict) => conflict.evidenceIds.some((id) => keptIds.has(id))),
     gaps: context.gaps,
     coverage: context.coverage,
     quality: context.quality,
     byDomain,
-    droppedIds: ranked.slice(plan.evidenceBudget).map((item) => item.id),
+    droppedIds: ranked.filter((item) => !keptIds.has(item.id)).map((item) => item.id),
   };
 }
 
-export function sourcesFor(
-  contexts: AISelectedContext[],
-  citedIds: Set<string>,
-): AISource[] {
+export function sourcesFor(contexts: AISelectedContext[], citedIds: Set<string>): AISource[] {
   const seen = new Map<string, AISource>();
   for (const context of contexts) {
     for (const item of context.evidence) {
@@ -105,49 +100,28 @@ export function sourcesFor(
         if (!existing.observedAt || (item.observedAt && item.observedAt > existing.observedAt)) existing.observedAt = item.observedAt;
         continue;
       }
-      seen.set(key, {
-        id: item.sourceId,
-        name: item.sourceName,
-        url: item.url,
-        domain: item.domain,
-        observedAt: item.observedAt,
-      });
+      seen.set(key, { id: item.sourceId, name: item.sourceName, url: item.url, domain: item.domain, observedAt: item.observedAt });
     }
   }
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function meetsRequirements(
-  contexts: AISelectedContext[],
-  plan: AIRoutePlan,
-): { ok: boolean; reason: string | null } {
+export function meetsRequirements(contexts: AISelectedContext[], plan: AIRoutePlan): { ok: boolean; reason: string | null } {
   if (contexts.length === 0) return { ok: false, reason: "No research context was supplied." };
   for (const context of contexts) {
     if (context.evidence.length === 0) return { ok: false, reason: `No evidence available for ${context.symbol}.` };
     const missing = plan.requiredDomains.filter((domain) => (context.byDomain[domain] ?? []).length === 0);
     if (missing.length > 0) return { ok: false, reason: `Missing required evidence domains for ${context.symbol}: ${missing.join(", ")}.` };
-    if (context.quality.overall < plan.minQuality) {
-      return { ok: false, reason: `Evidence quality for ${context.symbol} (${Math.round(context.quality.overall)}) is below the ${plan.minQuality} threshold for this question.` };
-    }
+    if (context.quality.overall < plan.minQuality) return { ok: false, reason: `Evidence quality for ${context.symbol} (${Math.round(context.quality.overall)}) is below the ${plan.minQuality} threshold for this question.` };
   }
   return { ok: true, reason: null };
 }
 
-/**
- * Safe fallback for partially available research. This does not weaken the
- * normal hard gate: it is used only when at least one usable evidence domain
- * exists and the context quality is high enough to support a qualified answer.
- */
-export function canUsePartialEvidence(
-  contexts: AISelectedContext[],
-  plan: AIRoutePlan,
-): { ok: boolean; reason: string | null } {
+export function canUsePartialEvidence(contexts: AISelectedContext[], plan: AIRoutePlan): { ok: boolean; reason: string | null } {
   if (contexts.length === 0) return { ok: false, reason: "No research context was supplied." };
   for (const context of contexts) {
     if (context.evidence.length === 0) return { ok: false, reason: `No evidence available for ${context.symbol}.` };
-    if (context.quality.overall < Math.max(25, Math.min(plan.minQuality, 35))) {
-      return { ok: false, reason: `Evidence quality for ${context.symbol} is too low for a qualified answer.` };
-    }
+    if (context.quality.overall < Math.max(25, Math.min(plan.minQuality, 35))) return { ok: false, reason: `Evidence quality for ${context.symbol} is too low for a qualified answer.` };
     const available = plan.domains.filter((domain) => (context.byDomain[domain] ?? []).length > 0);
     if (available.length === 0) return { ok: false, reason: `No requested evidence domain is available for ${context.symbol}.` };
   }
