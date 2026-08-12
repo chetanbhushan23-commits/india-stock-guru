@@ -17,26 +17,37 @@ function valueText(item: ResearchEvidence): string {
   return item.label;
 }
 
+const isDerivedDirectionalSynthesis = (item: ResearchEvidence) =>
+  item.origin === "computed" && item.key === "technical.directionalSynthesis";
+
 /**
- * Creates attributable computed trend evidence from already-collected facts.
- * Neutral and non-directional technical facts are still valid evidence: they
- * produce a qualified neutral/range-bound trend instead of an insufficient-data
- * response.
+ * Creates one attributable computed trend evidence item from already-collected
+ * facts. Existing derived synthesis items are ignored as inputs so repeated
+ * enrichment can never wrap a previous synthesis inside another synthesis.
  */
 export function addDirectionalEvidence(context: AISelectedContext, intent: AIIntent): AISelectedContext {
   if (!TREND_INTENTS.includes(intent)) return context;
 
-  const technicalAll = context.evidence.filter((item) => item.domain === "technical" && item.direction);
-  const marketAll = context.evidence.filter((item) => item.domain === "market" && item.direction);
+  const baseEvidence = context.evidence.filter((item) => !isDerivedDirectionalSynthesis(item));
+  const technicalAll = baseEvidence.filter((item) => item.domain === "technical" && item.direction);
+  const marketAll = baseEvidence.filter((item) => item.domain === "market" && item.direction);
   const technical = technicalAll.filter((item) => item.direction !== "neutral");
   const market = marketAll.filter((item) => item.direction !== "neutral");
   const candidates = technical.length ? technical : market.length ? market : technicalAll.length ? technicalAll : marketAll;
 
-  if (!candidates.length) return context;
+  const existingIds = context.evidence.filter(isDerivedDirectionalSynthesis).map((item) => item.id);
+  const withoutOldSynthesis: AISelectedContext = {
+    ...context,
+    evidence: baseEvidence,
+    byDomain: {
+      ...context.byDomain,
+      technical: (context.byDomain.technical ?? []).filter((id) => !existingIds.includes(id)),
+      market: (context.byDomain.market ?? []).filter((id) => !existingIds.includes(id)),
+    },
+  };
 
-  // Every available reading is neutral rather than missing. Surface the real
-  // readings as a computed range-bound synthesis so the model can describe the
-  // consolidation instead of incorrectly declaring insufficient evidence.
+  if (!candidates.length) return withoutOldSynthesis;
+
   if (!technical.length && !market.length) {
     const flatPool = technicalAll.length ? technicalAll : marketAll;
     const strongestFlat = [...flatPool]
@@ -46,7 +57,7 @@ export function addDirectionalEvidence(context: AISelectedContext, intent: AIInt
     const hasTechnical = technicalAll.length > 0;
     const flatStatement = hasTechnical
       ? `${context.ticker} shows a range-bound/neutral technical picture: ${strongestFlat.map(valueText).join("; ")}. No indicator is showing a clear bullish or bearish bias right now.`
-      : `${context.ticker} shows a range-bound/neutral market picture: ${strongestFlat.map(valueText).join("; ")}. Technical trend confirmation is not available in the current evidence set.`;
+      : `${context.ticker} shows a range-bound/neutral market picture: ${strongestFlat.map(valueText).join("; ")}. Technical confirmation is genuinely unavailable because no technical indicator evidence was collected.`;
     const flatSynthesized: ResearchEvidence = {
       id: `derived:direction:${context.symbol}:${intent}`,
       domain: "technical",
@@ -64,13 +75,12 @@ export function addDirectionalEvidence(context: AISelectedContext, intent: AIInt
       note: `Derived only from evidence ids: ${flatEvidenceIds.join(", ")}`,
       tags: ["technical", "trend", "directional-synthesis", "range-bound"],
     };
-
     return {
-      ...context,
-      evidence: [...context.evidence.filter((item) => item.id !== flatSynthesized.id), flatSynthesized],
+      ...withoutOldSynthesis,
+      evidence: [...withoutOldSynthesis.evidence, flatSynthesized],
       byDomain: {
-        ...context.byDomain,
-        technical: [...(context.byDomain.technical ?? []).filter((id) => id !== flatSynthesized.id), flatSynthesized.id],
+        ...withoutOldSynthesis.byDomain,
+        technical: [...(withoutOldSynthesis.byDomain.technical ?? []), flatSynthesized.id],
       },
     };
   }
@@ -94,7 +104,7 @@ export function addDirectionalEvidence(context: AISelectedContext, intent: AIInt
   const directionLabel = direction === "neutral" ? "neutral / no clear directional bias" : direction;
   const statement = hasTechnical
     ? `${context.ticker} has a ${directionLabel} technical bias based on ${strongest.map(valueText).join("; ")}. Directional evidence confidence: ${confidence}/100.`
-    : `${context.ticker} has a ${directionLabel} market bias based on ${strongest.map(valueText).join("; ")}. Technical confirmation is not available in the current evidence set.`;
+    : `${context.ticker} has a ${directionLabel} market bias based on ${strongest.map(valueText).join("; ")}. Technical confirmation is genuinely unavailable because no technical indicator evidence was collected.`;
 
   const synthesized: ResearchEvidence = {
     id: `derived:direction:${context.symbol}:${intent}`,
@@ -115,11 +125,11 @@ export function addDirectionalEvidence(context: AISelectedContext, intent: AIInt
   };
 
   return {
-    ...context,
-    evidence: [...context.evidence.filter((item) => item.id !== synthesized.id), synthesized],
+    ...withoutOldSynthesis,
+    evidence: [...withoutOldSynthesis.evidence, synthesized],
     byDomain: {
-      ...context.byDomain,
-      technical: [...(context.byDomain.technical ?? []).filter((id) => id !== synthesized.id), synthesized.id],
+      ...withoutOldSynthesis.byDomain,
+      technical: [...(withoutOldSynthesis.byDomain.technical ?? []), synthesized.id],
     },
   };
 }
