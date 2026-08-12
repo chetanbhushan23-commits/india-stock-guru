@@ -20,33 +20,60 @@ function valueText(item: ResearchEvidence): string {
 /**
  * Creates attributable computed trend evidence from already-collected facts.
  * Neutral and non-directional technical facts are still valid evidence: they
- * produce a qualified neutral/unclear trend instead of an insufficient-data
+ * produce a qualified neutral/range-bound trend instead of an insufficient-data
  * response.
  */
 export function addDirectionalEvidence(context: AISelectedContext, intent: AIIntent): AISelectedContext {
   if (!TREND_INTENTS.includes(intent)) return context;
 
-  const technical = context.evidence.filter((item) => item.domain === "technical");
-  const directionalTechnical = technical.filter((item) => item.direction === "bullish" || item.direction === "bearish");
-  const trendTechnical = technical.filter(
-    (item) => item.tags.includes("trend") || item.key === "technical.trend" || item.key === "technical.supertrend",
-  );
-  const market = context.evidence.filter((item) => item.domain === "market");
-  const directionalMarket = market.filter((item) => item.direction === "bullish" || item.direction === "bearish");
+  const technicalAll = context.evidence.filter((item) => item.domain === "technical" && item.direction);
+  const marketAll = context.evidence.filter((item) => item.domain === "market" && item.direction);
+  const technical = technicalAll.filter((item) => item.direction !== "neutral");
+  const market = marketAll.filter((item) => item.direction !== "neutral");
+  const candidates = technical.length ? technical : market.length ? market : technicalAll.length ? technicalAll : marketAll;
 
-  // Technical evidence has priority. If it has no explicit direction, the
-  // correct answer is neutral/unclear—not "insufficient". Market evidence is
-  // only used when no technical evidence exists at all.
-  const candidates = directionalTechnical.length
-    ? directionalTechnical
-    : trendTechnical.length
-      ? trendTechnical
-      : technical.length
-        ? technical
-        : directionalMarket.length
-          ? directionalMarket
-          : market;
   if (!candidates.length) return context;
+
+  // Every available reading is neutral rather than missing. Surface the real
+  // readings as a computed range-bound synthesis so the model can describe the
+  // consolidation instead of incorrectly declaring insufficient evidence.
+  if (!technical.length && !market.length) {
+    const flatPool = technicalAll.length ? technicalAll : marketAll;
+    const strongestFlat = [...flatPool]
+      .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
+      .slice(0, 6);
+    const flatEvidenceIds = strongestFlat.map((item) => item.id);
+    const hasTechnical = technicalAll.length > 0;
+    const flatStatement = hasTechnical
+      ? `${context.ticker} shows a range-bound/neutral technical picture: ${strongestFlat.map(valueText).join("; ")}. No indicator is showing a clear bullish or bearish bias right now.`
+      : `${context.ticker} shows a range-bound/neutral market picture: ${strongestFlat.map(valueText).join("; ")}. Technical trend confirmation is not available in the current evidence set.`;
+    const flatSynthesized: ResearchEvidence = {
+      id: `derived:direction:${context.symbol}:${intent}`,
+      domain: "technical",
+      key: "technical.directionalSynthesis",
+      label: hasTechnical ? "Technical directional synthesis" : "Market directional synthesis",
+      value: { kind: "text", value: flatStatement },
+      direction: "neutral",
+      importance: 100,
+      reliability: strongestFlat.length ? Math.max(...strongestFlat.map((item) => item.reliability)) : 0,
+      origin: "computed",
+      sourceId: "evidence-synthesis-engine",
+      sourceName: "Evidence Synthesis Engine",
+      observedAt: strongestFlat.find((item) => item.observedAt)?.observedAt ?? context.builtAt,
+      url: null,
+      note: `Derived only from evidence ids: ${flatEvidenceIds.join(", ")}`,
+      tags: ["technical", "trend", "directional-synthesis", "range-bound"],
+    };
+
+    return {
+      ...context,
+      evidence: [...context.evidence.filter((item) => item.id !== flatSynthesized.id), flatSynthesized],
+      byDomain: {
+        ...context.byDomain,
+        technical: [...(context.byDomain.technical ?? []).filter((id) => id !== flatSynthesized.id), flatSynthesized.id],
+      },
+    };
+  }
 
   const bullish = candidates.filter((item) => item.direction === "bullish");
   const bearish = candidates.filter((item) => item.direction === "bearish");
