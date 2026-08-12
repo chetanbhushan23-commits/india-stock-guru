@@ -1,50 +1,60 @@
-# IndiStock AI Dashboard
+# ChetanMarkets AI
 
-Build a modern AI-powered Indian Stock Market Dashboard for personal use.
+Grounded Indian stock-market intelligence platform for NSE and BSE research.
 
-Requirements:
+## Core capabilities
 
-- Dark theme
+- Dark, responsive market dashboard
+- NSE/BSE stock search and symbol resolution
+- Watchlist and portfolio views
+- Technical analysis and swing-trading signals
+- Fundamental and corporate-event research
+- News and sentiment intelligence
+- Evidence-backed AI Questions & Answers
+- Research timeline, evidence explorer and comparison tools
+- Grounded answers with confidence and source/evidence references
 
-- Mobile responsive
+## Market-data architecture
 
-- Dashboard
+ChetanMarkets AI keeps market data behind a server-side provider layer so the AI and technical engines consume normalized data rather than provider-specific responses.
 
-- Search stock
+1. **Yahoo Finance — primary market-data provider** for quotes, search and OHLCV history where available.
+2. **NSE/BSE — official-source verification** for exchange/regulatory evidence and disclosures.
+3. **Twelve Data — optional fallback** for quotes/history only when `TWELVE_DATA_API_KEY` is configured server-side.
 
-- Watchlist
+There is no `YAHOO_API_KEY` setting in the application. Yahoo access is handled by the server-side provider implementation. Twelve Data credentials must never be placed in frontend code or committed to GitHub.
 
-- Portfolio section
+## AI grounding pipeline
 
-- AI Assistant panel
+```text
+User question
+    -> stock/symbol resolution
+    -> research context
+    -> technical + fundamental + news evidence
+    -> directional evidence synthesis
+    -> AI reasoning
+    -> grounded answer + evidence + confidence
+```
 
-- Latest market news section
+For trend questions, a neutral/range-bound technical state is a valid result. The system should describe the actual indicator readings instead of treating a neutral market as missing evidence.
 
-- TradingView chart placeholder
+## Environment
 
-- Clean React + TypeScript architecture
+Create a local `.env` file when using the optional Twelve Data fallback:
 
-- Tailwind CSS
+```env
+TWELVE_DATA_API_KEY=your_key_here
+```
 
-- Ready for FastAPI backend and Supabase
-
-This project was built with [Lovable](https://lovable.dev).
-
-## Build with Lovable
-
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/b03d675e-605f-4eaf-856e-8fa6e7a35d65).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+Never commit `.env` or an actual API key. `.env.example` contains the safe placeholder configuration.
 
 ## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
 
 ```sh
 git clone <this-repository-url>
 cd <repository-name>
-npm i
+npm install
 npm run dev
 ```
+
+The current product name is **ChetanMarkets AI**. The repository contains the React + TypeScript frontend and the server-side market-data/AI integration layers used by the application.
