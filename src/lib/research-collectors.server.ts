@@ -8,8 +8,7 @@ import { analyzeCandles } from "./technical-analysis";
 import type { Range } from "./technical-types";
 import { fetchYahooHistoryFallback } from "./yahoo-history-fallback.server";
 
-const failure = (error: unknown, fallback: string): CollectorOutput =>
-  emptyOutput(error instanceof Error ? error.message : fallback, false);
+const failure = (error: unknown, fallback: string): CollectorOutput => emptyOutput(error instanceof Error ? error.message : fallback, false);
 
 export const marketCollector: ResearchCollector = {
   id: "market-collector",
@@ -21,15 +20,8 @@ export const marketCollector: ResearchCollector = {
       const quote = quotes[0];
       if (!quote) return emptyOutput(`No quote available for ${request.symbol}.`);
       const mapped = mapMarketQuote(quote, new Date().toISOString());
-      return {
-        ...mapped,
-        identity: { companyName: quote.name, currency: quote.currency, exchange: exchangeOf(quote.symbol) },
-        ok: true,
-        message: null,
-      };
-    } catch (error) {
-      return failure(error, "Market data collector failed.");
-    }
+      return { ...mapped, identity: { companyName: quote.name, currency: quote.currency, exchange: exchangeOf(quote.symbol) }, ok: true, message: null };
+    } catch (error) { return failure(error, "Market data collector failed."); }
   },
 };
 
@@ -54,9 +46,7 @@ export const technicalCollector: ResearchCollector = {
       if (!analysis.ok) return emptyOutput(`Technical history unavailable for ${request.symbol}: ${analysis.error.message}`);
       const mapped = mapTechnical(analysis.data);
       return { ...mapped, ok: true, message: null };
-    } catch (error) {
-      return failure(error, "Technical analysis collector failed.");
-    }
+    } catch (error) { return failure(error, "Technical analysis collector failed."); }
   },
 };
 
@@ -69,15 +59,8 @@ export const fundamentalCollector: ResearchCollector = {
       const result = await runFundamentalAnalysis(request.symbol, request.quarters, request.years);
       if (!result.ok) return emptyOutput(result.error.message);
       const mapped = mapFundamental(result.data);
-      return {
-        ...mapped,
-        identity: { companyName: result.data.profile.name, currency: result.data.profile.currency },
-        ok: true,
-        message: null,
-      };
-    } catch (error) {
-      return failure(error, "Fundamental analysis collector failed.");
-    }
+      return { ...mapped, identity: { companyName: result.data.profile.name, currency: result.data.profile.currency }, ok: true, message: null };
+    } catch (error) { return failure(error, "Fundamental analysis collector failed."); }
   },
 };
 
@@ -91,31 +74,22 @@ export const newsCollector: ResearchCollector = {
       if (!result.ok) return emptyOutput(result.error.message);
       const mapped = mapNews(result.data);
       const named = result.data.articles.find((article) => article.company.name);
-      return {
-        ...mapped,
-        identity: { companyName: named?.company.name ?? null, exchange: named?.company.exchange ?? null },
-        ok: mapped.evidence.length > 0,
-        message: mapped.evidence.length > 0 ? null : `No news items for ${request.symbol} in the last ${request.newsSinceDays} days.`,
-      };
-    } catch (error) {
-      return failure(error, "News intelligence collector failed.");
-    }
+      return { ...mapped, identity: { companyName: named?.company.name ?? null, exchange: named?.company.exchange ?? null }, ok: mapped.evidence.length > 0, message: mapped.evidence.length > 0 ? null : `No news items for ${request.symbol} in the last ${request.newsSinceDays} days.` };
+    } catch (error) { return failure(error, "News intelligence collector failed."); }
   },
 };
 
-/**
- * Corporate-action collector. It deliberately reuses the exchange-aware news
- * aggregation layer because that layer already combines NSE/BSE filings and
- * normalises dividend/bonus/split/rights/buyback/merger records. A successful
- * empty feed is represented as a bounded coverage fact, not as fake action data.
- */
+const EXCHANGE_ACTION_PROVIDERS = ["nse", "bse", "exchange-filings"];
+const EXCHANGE_EVENT_PROVIDERS = ["nse", "bse", "exchange-filings", "investor-relations"];
+
+/** Corporate actions are collected directly from the exchange-aware aggregation adapters. */
 export const corporateActionCollector: ResearchCollector = {
   id: "corporate-action-collector",
   domain: "corporate-action",
   async collect(request) {
     try {
       const { aggregateNews } = await import("./news-aggregation.server");
-      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: Math.max(request.newsLimit, 50), sinceDays: Math.max(request.newsSinceDays, 30) });
+      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: Math.max(request.newsLimit, 50), sinceDays: Math.max(request.newsSinceDays, 30), providerIds: EXCHANGE_ACTION_PROVIDERS });
       if (!result.ok) return emptyOutput(result.error.message);
       const actions = result.data.corporateActions;
       const out: CollectorOutput = { evidence: [], timeline: [], gaps: [], completeness: 1, ok: true, message: null };
@@ -123,127 +97,47 @@ export const corporateActionCollector: ResearchCollector = {
       for (const action of actions) {
         const observedAt = action.announcedAt ?? action.recordDate ?? action.exDate ?? now;
         const detail = [action.description, action.ratio ? `Ratio ${action.ratio}` : null, action.value !== null ? `Value ${action.value}` : null].filter(Boolean).join(" · ");
+        const evidenceId = `corporate-action:corporate-action.${action.kind}:${action.id}`;
         out.evidence.push(makeEvidence({
-          domain: "corporate-action",
-          key: `corporate-action.${action.kind}`,
-          discriminator: action.id,
-          label: `${action.kind.replace(/-/g, " ")} action`,
-          value: textValue(detail || `${action.kind} action reported by the exchange feed.`),
-          importance: 95,
-          reliability: Math.max(0.9, action.source.baseReliability),
-          origin: "provider",
-          direction: "neutral",
-          observedAt: toIso(observedAt),
-          url: action.url,
-          note: action.recordDate ? `Record date: ${action.recordDate}` : action.exDate ? `Ex-date: ${action.exDate}` : null,
-          tags: ["corporate-action", action.kind, action.source.kind],
-          sourceId: action.source.id,
-          sourceName: action.source.name,
+          domain: "corporate-action", key: `corporate-action.${action.kind}`, discriminator: action.id,
+          label: `${action.kind.replace(/-/g, " ")} action`, value: textValue(detail || `${action.kind} action reported by the exchange feed.`),
+          importance: 95, reliability: Math.max(0.9, action.source.baseReliability), origin: "provider", direction: "neutral",
+          observedAt: toIso(observedAt), url: action.url, note: action.recordDate ? `Record date: ${action.recordDate}` : action.exDate ? `Ex-date: ${action.exDate}` : null,
+          tags: ["corporate-action", action.kind, action.source.kind], sourceId: action.source.id, sourceName: action.source.name,
         }));
-        if (observedAt) out.timeline.push({
-          id: `timeline:${action.id}`,
-          at: toIso(observedAt) ?? now,
-          domain: "corporate-action",
-          title: `${action.kind.replace(/-/g, " ")} — ${action.company.name ?? request.symbol}`,
-          detail: detail || null,
-          importance: 95,
-          direction: "neutral",
-          sourceId: action.source.id,
-          url: action.url,
-          evidenceIds: [`corporate-action:corporate-action.${action.kind}:${action.id}`],
-        });
+        if (observedAt) out.timeline.push({ id: `timeline:${action.id}`, at: toIso(observedAt) ?? now, domain: "corporate-action", title: `${action.kind.replace(/-/g, " ")} — ${action.company.name ?? request.symbol}`, detail: detail || null, importance: 95, direction: "neutral", sourceId: action.source.id, url: action.url, evidenceIds: [evidenceId] });
       }
       if (actions.length === 0) {
-        out.evidence.push(makeEvidence({
-          domain: "corporate-action",
-          key: "corporate-action.feedCoverage",
-          label: "Corporate-action feed coverage",
-          value: textValue(`NSE/BSE corporate-action feeds returned no classified corporate actions for ${request.symbol} in the configured ${Math.max(request.newsSinceDays, 30)}-day window.`),
-          importance: 35,
-          reliability: 0.9,
-          origin: "provider",
-          direction: "neutral",
-          observedAt: now,
-          url: null,
-          tags: ["corporate-action", "coverage"],
-          sourceId: "exchange-action-aggregation",
-          sourceName: "NSE/BSE Corporate Action Aggregator",
-        }));
+        out.evidence.push(makeEvidence({ domain: "corporate-action", key: "corporate-action.feedCoverage", label: "Corporate-action feed coverage", value: textValue(`NSE/BSE corporate-action feeds returned no classified corporate actions for ${request.symbol} in the configured ${Math.max(request.newsSinceDays, 30)}-day window.`), importance: 35, reliability: 0.9, origin: "provider", direction: "neutral", observedAt: now, url: null, tags: ["corporate-action", "coverage"], sourceId: "exchange-action-aggregation", sourceName: "NSE/BSE Corporate Action Aggregator" }));
       }
       return out;
-    } catch (error) {
-      return failure(error, "Corporate-action collector failed.");
-    }
+    } catch (error) { return failure(error, "Corporate-action collector failed."); }
   },
 };
 
-/**
- * Event collector: exchange/IR classified events such as earnings, board
- * meetings, orders, ratings, management changes and regulatory notices.
- */
+/** Exchange/IR classified events: earnings, board meetings, orders, ratings, management and regulatory notices. */
 export const eventCollector: ResearchCollector = {
   id: "event-collector",
   domain: "event",
   async collect(request) {
     try {
       const { aggregateNews } = await import("./news-aggregation.server");
-      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: Math.max(request.newsLimit, 50), sinceDays: Math.max(request.newsSinceDays, 30) });
+      const result = await aggregateNews({ symbol: request.symbol, query: null, limit: Math.max(request.newsLimit, 50), sinceDays: Math.max(request.newsSinceDays, 30), providerIds: EXCHANGE_EVENT_PROVIDERS });
       if (!result.ok) return emptyOutput(result.error.message);
       const events = result.data.events;
       const out: CollectorOutput = { evidence: [], timeline: [], gaps: [], completeness: 1, ok: true, message: null };
       const now = result.data.fetchedAt;
       for (const event of events) {
         const observedAt = event.announcedAt ?? event.eventDate ?? now;
-        out.evidence.push(makeEvidence({
-          domain: "event",
-          key: `event.${event.type}`,
-          discriminator: event.id,
-          label: `${event.type.replace(/-/g, " ")} event`,
-          value: textValue(event.detail ? `${event.title} · ${event.detail}` : event.title),
-          importance: 85,
-          reliability: Math.max(0.85, event.source.baseReliability),
-          origin: "provider",
-          direction: "neutral",
-          observedAt: toIso(observedAt),
-          url: event.url,
-          tags: ["event", event.type, event.source.kind],
-          sourceId: event.source.id,
-          sourceName: event.source.name,
-        }));
+        out.evidence.push(makeEvidence({ domain: "event", key: `event.${event.type}`, discriminator: event.id, label: `${event.type.replace(/-/g, " ")} event`, value: textValue(event.detail ? `${event.title} · ${event.detail}` : event.title), importance: 85, reliability: Math.max(0.85, event.source.baseReliability), origin: "provider", direction: "neutral", observedAt: toIso(observedAt), url: event.url, tags: ["event", event.type, event.source.kind], sourceId: event.source.id, sourceName: event.source.name }));
       }
-      if (events.length === 0) {
-        out.evidence.push(makeEvidence({
-          domain: "event",
-          key: "event.feedCoverage",
-          label: "Event feed coverage",
-          value: textValue(`NSE/BSE/IR event feeds returned no classified company events for ${request.symbol} in the configured ${Math.max(request.newsSinceDays, 30)}-day window.`),
-          importance: 30,
-          reliability: 0.9,
-          origin: "provider",
-          direction: "neutral",
-          observedAt: now,
-          url: null,
-          tags: ["event", "coverage"],
-          sourceId: "event-aggregation",
-          sourceName: "NSE/BSE Event Aggregator",
-        }));
-      }
+      if (events.length === 0) out.evidence.push(makeEvidence({ domain: "event", key: "event.feedCoverage", label: "Event feed coverage", value: textValue(`NSE/BSE/IR event feeds returned no classified company events for ${request.symbol} in the configured ${Math.max(request.newsSinceDays, 30)}-day window.`), importance: 30, reliability: 0.9, origin: "provider", direction: "neutral", observedAt: now, url: null, tags: ["event", "coverage"], sourceId: "event-aggregation", sourceName: "NSE/BSE Event Aggregator" }));
       return out;
-    } catch (error) {
-      return failure(error, "Event intelligence collector failed.");
-    }
+    } catch (error) { return failure(error, "Event intelligence collector failed."); }
   },
 };
 
-export const RESEARCH_COLLECTORS: ResearchCollector[] = [
-  marketCollector,
-  technicalCollector,
-  fundamentalCollector,
-  newsCollector,
-  corporateActionCollector,
-  eventCollector,
-];
-
+export const RESEARCH_COLLECTORS: ResearchCollector[] = [marketCollector, technicalCollector, fundamentalCollector, newsCollector, corporateActionCollector, eventCollector];
 export const collectorFor = (domain: string) => RESEARCH_COLLECTORS.find((collector) => collector.domain === domain) ?? null;
 export const tickerOf = (symbol: string) => stripSuffix(symbol);
 export const nowIso = () => toIso(Date.now()) as string;
