@@ -49,7 +49,17 @@ export const technicalCollector: ResearchCollector = {
   async collect(request) {
     try {
       const { providerHistory } = await import("./market-data.server");
-      let candles = await providerHistory(request.symbol, request.interval, request.range);
+
+      // A network failure from the primary Yahoo history request must NOT abort
+      // the technical collector. Treat it exactly like an empty history and
+      // continue through the independent fallback path below.
+      let candles = [] as Awaited<ReturnType<typeof providerHistory>>;
+      try {
+        candles = await providerHistory(request.symbol, request.interval, request.range);
+      } catch {
+        candles = [];
+      }
+
       let analysis = analyzeCandles(request.symbol, candles, request.interval, request.range);
 
       // Yahoo's chart endpoint can intermittently return an empty/short history
