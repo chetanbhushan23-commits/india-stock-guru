@@ -1,16 +1,10 @@
 /**
  * Exchange-aware symbol discovery (server-only).
  *
- * Resolution strategy:
- * 1. Search the live NSE/BSE-capable market discovery provider.
- * 2. Prefer exact ticker/name matches and keep both .NS and .BO results.
- * 3. If a natural-language question contains no obvious ticker, search a
- *    compact company-name phrase before falling back to the full question.
- *
- * This module only resolves symbols. ResearchContext remains responsible for
- * collecting market/technical/fundamental/news evidence.
+ * Live search is preferred, but deterministic aliases/ticker extraction keep
+ * stock questions resolvable when a market-search provider is temporarily down.
+ * ResearchContext remains responsible for validating and collecting evidence.
  */
-
 import { providerSearch } from "./market-data.server";
 import type { SearchResult } from "./market-types";
 
@@ -18,51 +12,72 @@ const QUESTION_STOPWORDS = new Set([
   "WHAT", "WHY", "WHEN", "WHERE", "HOW", "WHICH", "WHO", "IS", "ARE", "THE", "A", "AN",
   "FOR", "OF", "TO", "IN", "ON", "AT", "AND", "OR", "WITH", "ABOUT", "TODAY", "CURRENT",
   "TREND", "PRICE", "STOCK", "SHARE", "SHARES", "RISK", "RISKS", "ANALYSIS", "SHORT", "TERM",
-  "LONG", "PLEASE", "TELL", "ME", "KYA", "HAI", "KESE", "KA", "KI", "KE", "AUR", "ME", "MUJHE",
+  "LONG", "PLEASE", "TELL", "ME", "KYA", "HAI", "KESE", "KA", "KI", "KE", "AUR", "MUJHE",
   "BATAO", "BATA", "KARO", "KAR", "HUA", "HUI", "KYU", "KYON", "AAJ", "ABHI", "PAR", "SE",
 ]);
 
+const COMMON_ALIASES: Record<string, string> = {
+  RELIANCE: "RELIANCE", "RELIANCE INDUSTRIES": "RELIANCE", INFOSYS: "INFY",
+  HDFCBANK: "HDFCBANK", "HDFC BANK": "HDFCBANK", ICICIBANK: "ICICIBANK", "ICICI BANK": "ICICIBANK",
+  SBI: "SBIN", "STATE BANK OF INDIA": "SBIN", TCS: "TCS", "TATA CONSULTANCY SERVICES": "TCS",
+  TATAMOTORS: "TATAMOTORS", "TATA MOTORS": "TATAMOTORS", TATASTEEL: "TATASTEEL", "TATA STEEL": "TATASTEEL",
+  ITC: "ITC", LT: "LT", "L&T": "LT", "LARSEN AND TOUBRO": "LT", BHARTIARTL: "BHARTIARTL",
+  AIRTEL: "BHARTIARTL", "BHARTI AIRTEL": "BHARTIARTL", AXISBANK: "AXISBANK", "AXIS BANK": "AXISBANK",
+  KOTAK: "KOTAKBANK", KOTAKBANK: "KOTAKBANK", "KOTAK MAHINDRA BANK": "KOTAKBANK", ADANIENT: "ADANIENT",
+  "ADANI ENTERPRISES": "ADANIENT", ADANIPORTS: "ADANIPORTS", "ADANI PORTS": "ADANIPORTS", MARUTI: "MARUTI",
+  "MARUTI SUZUKI": "MARUTI", SUNPHARMA: "SUNPHARMA", "SUN PHARMA": "SUNPHARMA", LUPIN: "LUPIN",
+  WIPRO: "WIPRO", HCLTECH: "HCLTECH", "HCL TECHNOLOGIES": "HCLTECH", BAJFINANCE: "BAJFINANCE",
+  "BAJAJ FINANCE": "BAJFINANCE", BAJAJFINSV: "BAJAJFINSV", "BAJAJ FINSERV": "BAJAJFINSV", TITAN: "TITAN",
+  ULTRACEMCO: "ULTRACEMCO", "ULTRATECH CEMENT": "ULTRACEMCO",
+};
+
+function normalize(value: string): string {
+  return value.replace(/\.NS$|\.BO$/i, "").replace(/[^\p{L}\p{N}&.-]+/gu, " ").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
 function compactQuery(question: string): string {
-  const words = question
-    .replace(/[^\p{L}\p{N}.&-]+/gu, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .filter((word) => !QUESTION_STOPWORDS.has(word.toUpperCase()))
-    .slice(0, 6);
-  return words.join(" ").trim();
+  return question.replace(/[^\p{L}\p{N}.&-]+/gu, " ").split(/\s+/).filter(Boolean)
+    .filter((word) => !QUESTION_STOPWORDS.has(word.toUpperCase())).slice(0, 6).join(" ").trim();
 }
 
 function score(result: SearchResult, query: string): number {
-  const q = query.toLowerCase();
-  const ticker = result.ticker.toLowerCase();
-  const name = result.name.toLowerCase();
-  let value = 0;
-  if (ticker === q) value += 100;
-  if (name === q) value += 95;
-  if (ticker.startsWith(q)) value += 60;
-  if (name.startsWith(q)) value += 55;
-  if (name.includes(q)) value += 40;
-  if (ticker.includes(q)) value += 35;
-  return value;
+  const q = normalize(query), ticker = normalize(result.ticker), name = normalize(result.name);
+  return (ticker === q ? 150 : 0) + (name === q ? 145 : 0) + (ticker.startsWith(q) ? 90 : 0) +
+    (name.startsWith(q) ? 85 : 0) + (name.includes(q) ? 60 : 0) + (ticker.includes(q) ? 50 : 0) +
+    (result.exchange === "NSE" ? 5 : 0);
+}
+
+function deterministicCandidates(query: string): SearchResult[] {
+  const normalized = normalize(query);
+  const alias = COMMON_ALIASES[normalized];
+  const compact = normalized.replace(/\s+/g, "");
+  const ticker = alias ?? (/^[A-Z][A-Z0-9&.-]{1,19}$/.test(compact) ? compact : null);
+  if (!ticker) return [];
+  return [
+    { symbol: `${ticker}.NS`, ticker, name: ticker, exchange: "NSE" },
+    { symbol: `${ticker}.BO`, ticker, name: ticker, exchange: "BSE" },
+  ];
 }
 
 export async function resolveQuestionSymbols(question: string, limit = 4): Promise<SearchResult[]> {
   const query = compactQuery(question);
-  const candidates = [query, question.trim()].filter(Boolean);
   const merged = new Map<string, SearchResult>();
 
-  for (const candidate of candidates) {
+  // Seed deterministic matches first: provider outages must not turn a known
+  // stock question into "no listed NSE/BSE equity could be resolved".
+  for (const candidate of [query, question.trim()]) {
+    for (const result of deterministicCandidates(candidate)) merged.set(result.symbol, result);
+  }
+
+  for (const candidate of [query, question.trim()].filter(Boolean)) {
     try {
       const results = await providerSearch(candidate);
       for (const result of results) merged.set(result.symbol, result);
-      if (merged.size >= limit && query) break;
     } catch {
-      // Symbol discovery is best-effort. The research engine will report a
-      // verified evidence gap if no usable symbol can be resolved.
+      // Live discovery is best-effort; deterministic matches remain available.
     }
+    if (merged.size >= limit && query) break;
   }
 
-  return [...merged.values()]
-    .sort((a, b) => score(b, query) - score(a, query))
-    .slice(0, limit);
+  return [...merged.values()].sort((a, b) => score(b, query) - score(a, query)).slice(0, limit);
 }
