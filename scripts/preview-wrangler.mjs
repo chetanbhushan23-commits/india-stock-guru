@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const binName = process.platform === "win32" ? "wrangler.cmd" : "wrangler";
+const isWindows = process.platform === "win32";
+const binName = isWindows ? "wrangler.cmd" : "wrangler";
 const wranglerBin = resolve("node_modules", ".bin", binName);
 
 if (!existsSync(wranglerBin)) {
@@ -10,11 +11,18 @@ if (!existsSync(wranglerBin)) {
   process.exit(1);
 }
 
-const child = spawn(wranglerBin, ["--cwd", ".", "dev", "--port", "3000", "--host", "localhost"], {
-  stdio: "inherit",
-  shell: false,
-  windowsHide: false,
-});
+// Windows cannot spawn .cmd files with shell:false. This was the cause of
+// `spawn EINVAL` on Node 24. Use the Windows command shell only for the
+// package shim; keep shell:false on POSIX systems.
+const child = spawn(
+  wranglerBin,
+  ["--cwd", ".", "dev", "--port", "3000", "--host", "localhost"],
+  {
+    stdio: "inherit",
+    shell: isWindows,
+    windowsHide: false,
+  },
+);
 
 child.on("error", (error) => {
   console.error(`Unable to start Wrangler: ${error.message}`);
