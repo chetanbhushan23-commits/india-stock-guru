@@ -37,9 +37,7 @@ function normaliseClaims(raw: unknown, knownIds: Set<string>, dropped: { count: 
 
 export function parseModelJson(raw: string): RawAnswer | null {
   const trimmed = raw.trim();
-  const candidate = trimmed.startsWith("{")
-    ? trimmed
-    : trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1);
+  const candidate = trimmed.startsWith("{") ? trimmed : trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1);
   if (!candidate) return null;
   try {
     const parsed: unknown = JSON.parse(candidate);
@@ -49,14 +47,7 @@ export function parseModelJson(raw: string): RawAnswer | null {
   }
 }
 
-export function insufficientAnswer(params: {
-  intent: AIIntent;
-  question: string;
-  symbols: string[];
-  reason: string;
-  providerId: string;
-  missing?: string[];
-}): AIAnswer {
+export function insufficientAnswer(params: { intent: AIIntent; question: string; symbols: string[]; reason: string; providerId: string; missing?: string[] }): AIAnswer {
   return {
     version: 1,
     intent: params.intent,
@@ -80,22 +71,12 @@ export function insufficientAnswer(params: {
   };
 }
 
-const TREND_INTENTS: AIIntent[] = [
-  "technical-analysis",
-  "swing-trade",
-  "explain-movement",
-  "why-rise",
-  "why-fall",
-  "buy-or-wait",
-];
+const TREND_INTENTS: AIIntent[] = ["technical-analysis", "swing-trade", "explain-movement", "why-rise", "why-fall", "buy-or-wait"];
 
-function trendFallback(contexts: AISelectedContext[], question: string): {
-  summary: string;
-  evidence: AIClaim[];
-  technicalEvidence: AIClaim[];
-} | null {
-  if (!TREND_INTENTS.includes(contexts[0]?.evidence.find((item) => item.id.startsWith("derived:direction:")) ? "technical-analysis" : "general-market" as AIIntent)) return null;
+function trendFallback(contexts: AISelectedContext[], intent: AIIntent): { summary: string; evidence: AIClaim[]; technicalEvidence: AIClaim[] } | null {
+  if (!TREND_INTENTS.includes(intent)) return null;
   const context = contexts[0];
+  if (!context) return null;
   const synthesis = context.evidence.find((item) => item.key === "technical.directionalSynthesis");
   if (!synthesis) return null;
   const supporting = context.evidence
@@ -103,23 +84,23 @@ function trendFallback(contexts: AISelectedContext[], question: string): {
     .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
     .slice(0, 4);
   const direction = synthesis.direction === "bullish" ? "bullish" : synthesis.direction === "bearish" ? "bearish" : "neutral/sideways";
-  const summary = `${context.ticker}'s current evidence-derived technical bias is ${direction}. ${synthesis.value.kind === "text" ? synthesis.value.value : synthesis.label}. ${supporting.length ? `Key supporting indicators include ${supporting.map((item) => item.label + (item.value.kind === "number" ? ` at ${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : "")).join(", ")}.` : "The available technical evidence is limited, so the bias should be treated as qualified."} This conclusion is based only on the verified research context for the question.`;
-  const claim = { statement: synthesis.value.kind === "text" ? synthesis.value.value : `${context.ticker} has a ${direction} technical bias.`, evidenceIds: [synthesis.id] };
-  return { summary, evidence: [claim], technicalEvidence: [claim, ...supporting.map((item) => ({ statement: item.label + (item.value.kind === "number" ? `: ${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : `: ${item.value.kind === "text" ? item.value.value : "available"}`), evidenceIds: [item.id] }))] };
+  const synthesisText = synthesis.value.kind === "text" ? synthesis.value.value : `${context.ticker} has a ${direction} technical bias.`;
+  const supportingText = supporting.length
+    ? `Key supporting indicators include ${supporting.map((item) => item.label + (item.value.kind === "number" ? ` at ${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : "")).join(", ")}.`
+    : "The available technical evidence is limited, so the bias should be treated as qualified.";
+  const summary = `${context.ticker}'s current evidence-derived technical bias is ${direction}. ${synthesisText} ${supportingText} This conclusion is based only on the verified research context.`;
+  const mainClaim: AIClaim = { statement: synthesisText, evidenceIds: [synthesis.id] };
+  const supportClaims: AIClaim[] = supporting.map((item) => ({
+    statement: `${item.label}: ${item.value.kind === "number" ? `${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : item.value.kind === "text" ? item.value.value : "available"}`,
+    evidenceIds: [item.id],
+  }));
+  return { summary, evidence: [mainClaim], technicalEvidence: [mainClaim, ...supportClaims] };
 }
 
-export function formatAnswer(params: {
-  raw: RawAnswer;
-  intent: AIIntent;
-  question: string;
-  contexts: AISelectedContext[];
-  providerId: string;
-  model: string | null;
-}): AIAnswer {
+export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; question: string; contexts: AISelectedContext[]; providerId: string; model: string | null }): AIAnswer {
   const { raw, contexts } = params;
   const knownIds = new Set(contexts.flatMap((context) => context.evidence.map((item) => item.id)));
   const dropped = { count: 0 };
-
   const evidence = normaliseClaims(raw["evidence"], knownIds, dropped);
   const technicalEvidence = normaliseClaims(raw["technicalEvidence"], knownIds, dropped);
   const fundamentalEvidence = normaliseClaims(raw["fundamentalEvidence"], knownIds, dropped);
@@ -127,19 +108,11 @@ export function formatAnswer(params: {
   const corporateEvents = normaliseClaims(raw["corporateEvents"], knownIds, dropped);
   const risks = normaliseClaims(raw["risks"], knownIds, dropped);
 
-  const fallback = TREND_INTENTS.includes(params.intent) ? trendFallback(contexts, params.question) : null;
+  const fallback = trendFallback(contexts, params.intent);
   const finalEvidence = evidence.length ? evidence : fallback?.evidence ?? [];
   const finalTechnical = technicalEvidence.length ? technicalEvidence : fallback?.technicalEvidence ?? [];
-  const allClaims = [
-    ...finalEvidence,
-    ...finalTechnical,
-    ...fundamentalEvidence,
-    ...newsEvidence,
-    ...corporateEvents,
-    ...risks,
-  ];
+  const allClaims = [...finalEvidence, ...finalTechnical, ...fundamentalEvidence, ...newsEvidence, ...corporateEvents, ...risks];
   const citedIds = new Set(allClaims.flatMap((claim) => claim.evidenceIds));
-
   const symbols = contexts.map((context) => context.symbol);
   const modelSaysInsufficient = raw["insufficient"] === true;
   const modelSummary = asString(raw["summary"]);
