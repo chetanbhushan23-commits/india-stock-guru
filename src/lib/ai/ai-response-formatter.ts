@@ -1,16 +1,10 @@
 /**
- * AIResponseFormatter — validates and normalises raw model JSON into the
- * mandatory 10-part AIAnswer.
+ * AIResponseFormatter — validates model JSON and deterministically fills any
+ * evidence-backed section the model omitted. The formatter never invents facts.
  */
 
 import { sourcesFor } from "./ai-context-selector";
-import {
-  INSUFFICIENT_EVIDENCE_MESSAGE,
-  type AIAnswer,
-  type AIClaim,
-  type AIIntent,
-  type AISelectedContext,
-} from "./ai-types";
+import { INSUFFICIENT_EVIDENCE_MESSAGE, type AIAnswer, type AIClaim, type AIIntent, type AISelectedContext } from "./ai-types";
 
 type RawClaim = { statement?: unknown; evidenceIds?: unknown };
 type RawAnswer = Record<string, unknown>;
@@ -26,10 +20,7 @@ function normaliseClaims(raw: unknown, knownIds: Set<string>, dropped: { count: 
     const ids = Array.isArray(entry?.evidenceIds)
       ? [...new Set((entry.evidenceIds as unknown[]).map(asString))].filter((id) => knownIds.has(id))
       : [];
-    if (ids.length === 0) {
-      dropped.count += 1;
-      continue;
-    }
+    if (ids.length === 0) { dropped.count += 1; continue; }
     out.push({ statement, evidenceIds: ids });
   }
   return out;
@@ -42,9 +33,7 @@ export function parseModelJson(raw: string): RawAnswer | null {
   try {
     const parsed: unknown = JSON.parse(candidate);
     return parsed && typeof parsed === "object" ? (parsed as RawAnswer) : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 export function insufficientAnswer(params: { intent: AIIntent; question: string; symbols: string[]; reason: string; providerId: string; missing?: string[] }): AIAnswer {
@@ -73,16 +62,30 @@ export function insufficientAnswer(params: { intent: AIIntent; question: string;
 
 const TREND_INTENTS: AIIntent[] = ["technical-analysis", "swing-trade", "explain-movement", "why-rise", "why-fall", "buy-or-wait"];
 
+function claimFromEvidence(item: AISelectedContext["evidence"][number]): AIClaim {
+  const value = item.value.kind === "number"
+    ? `${item.value.value}${item.value.unit === "percent" ? "%" : ""}`
+    : item.value.kind === "text" ? item.value.value : item.value.kind === "boolean" ? String(item.value.value) : "available";
+  return { statement: `${item.label}: ${value}`, evidenceIds: [item.id] };
+}
+
+/** Deterministic section fallback: model omissions never erase verified facts. */
+function domainFallback(contexts: AISelectedContext[], domains: AISelectedContext["evidence"][number]["domain"][], limit = 6): AIClaim[] {
+  return contexts.flatMap((context) => context.evidence
+    .filter((item) => domains.includes(item.domain))
+    .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
+    .slice(0, limit)
+    .map(claimFromEvidence));
+}
+
 function trendFallback(contexts: AISelectedContext[], intent: AIIntent): { summary: string; evidence: AIClaim[]; technicalEvidence: AIClaim[] } | null {
   if (!TREND_INTENTS.includes(intent)) return null;
   const context = contexts[0];
   if (!context) return null;
   const synthesis = context.evidence.find((item) => item.key === "technical.directionalSynthesis");
   if (!synthesis) return null;
-  const supporting = context.evidence
-    .filter((item) => item.domain === "technical" && item.id !== synthesis.id)
-    .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
-    .slice(0, 4);
+  const supporting = context.evidence.filter((item) => item.domain === "technical" && item.id !== synthesis.id)
+    .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability).slice(0, 4);
   const direction = synthesis.direction === "bullish" ? "bullish" : synthesis.direction === "bearish" ? "bearish" : "neutral/sideways";
   const synthesisText = synthesis.value.kind === "text" ? synthesis.value.value : `${context.ticker} has a ${direction} technical bias.`;
   const supportingText = supporting.length
@@ -90,18 +93,12 @@ function trendFallback(contexts: AISelectedContext[], intent: AIIntent): { summa
     : "The available technical evidence is limited, so the bias should be treated as qualified.";
   const summary = `${context.ticker}'s current evidence-derived technical bias is ${direction}. ${synthesisText} ${supportingText} This conclusion is based only on the verified research context.`;
   const mainClaim: AIClaim = { statement: synthesisText, evidenceIds: [synthesis.id] };
-  const supportClaims: AIClaim[] = supporting.map((item) => ({
-    statement: `${item.label}: ${item.value.kind === "number" ? `${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : item.value.kind === "text" ? item.value.value : "available"}`,
-    evidenceIds: [item.id],
-  }));
+  const supportClaims = supporting.map(claimFromEvidence);
   return { summary, evidence: [mainClaim], technicalEvidence: [mainClaim, ...supportClaims] };
 }
 
-const isTransientFetchSummary = (summary: string): boolean =>
-  /^(failed to fetch|failed fetching|network error|network request failed|request failed|unable to fetch|fetch failed)[.!]?$/i.test(summary.trim());
-
-const isGenericTrendFailure = (summary: string): boolean =>
-  /does not contain enough directional evidence|not enough directional evidence|insufficient.*directional evidence/i.test(summary);
+const isTransientFetchSummary = (summary: string): boolean => /^(failed to fetch|failed fetching|network error|network request failed|request failed|unable to fetch|fetch failed)[.!]?$/i.test(summary.trim());
+const isGenericTrendFailure = (summary: string): boolean => /does not contain enough directional evidence|not enough directional evidence|insufficient.*directional evidence/i.test(summary);
 
 export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; question: string; contexts: AISelectedContext[]; providerId: string; model: string | null }): AIAnswer {
   const { raw, contexts } = params;
@@ -115,9 +112,14 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
   const risks = normaliseClaims(raw["risks"], knownIds, dropped);
 
   const fallback = trendFallback(contexts, params.intent);
-  const finalEvidence = evidence.length ? evidence : fallback?.evidence ?? [];
-  const finalTechnical = technicalEvidence.length ? technicalEvidence : fallback?.technicalEvidence ?? [];
-  const allClaims = [...finalEvidence, ...finalTechnical, ...fundamentalEvidence, ...newsEvidence, ...corporateEvents, ...risks];
+  const finalEvidence = evidence.length ? evidence : fallback?.evidence ?? domainFallback(contexts, ["market", "technical", "fundamental", "news", "corporate-action", "event"], 8);
+  const finalTechnical = technicalEvidence.length ? technicalEvidence : fallback?.technicalEvidence ?? domainFallback(contexts, ["technical"], 8);
+  const finalFundamental = fundamentalEvidence.length ? fundamentalEvidence : domainFallback(contexts, ["fundamental"], 8);
+  const finalNews = newsEvidence.length ? newsEvidence : domainFallback(contexts, ["news"], 8);
+  const finalCorporate = corporateEvents.length ? corporateEvents : domainFallback(contexts, ["corporate-action", "event"], 8);
+  const finalRisks = risks.length ? risks : domainFallback(contexts, ["fundamental", "technical", "news", "event"], 6);
+
+  const allClaims = [...finalEvidence, ...finalTechnical, ...finalFundamental, ...finalNews, ...finalCorporate, ...finalRisks];
   const citedIds = new Set(allClaims.flatMap((claim) => claim.evidenceIds));
   const symbols = contexts.map((context) => context.symbol);
   const modelSaysInsufficient = raw["insufficient"] === true;
@@ -125,43 +127,31 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
   const genericTrendFailure = isGenericTrendFailure(modelSummary);
   const transientFetchFailure = isTransientFetchSummary(modelSummary);
 
-  // A transient network/provider phrase is never a market conclusion. Prefer
-  // the deterministic evidence-backed trend synthesis whenever it exists.
   const summary = fallback && (modelSaysInsufficient || genericTrendFailure || transientFetchFailure)
     ? fallback.summary
-    : modelSummary;
+    : modelSummary || (finalEvidence[0]?.statement ?? "Evidence-backed research is available in the sections below.");
 
   const gapNotes = contexts.flatMap((context) => context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`));
-  const modelMissing = Array.isArray(raw["missingInformation"])
-    ? (raw["missingInformation"] as unknown[]).map(asString).filter(Boolean)
-    : [];
+  const modelMissing = Array.isArray(raw["missingInformation"]) ? (raw["missingInformation"] as unknown[]).map(asString).filter(Boolean) : [];
   const missingInformation = [...new Set([...modelMissing, ...gapNotes])];
 
-  // If a transient fetch phrase is all the model gave us, refuse that phrase
-  // only when there is no deterministic evidence-backed fallback available.
   if (allClaims.length === 0 || !summary || (transientFetchFailure && !fallback)) {
     const reason = transientFetchFailure
       ? "The AI provider returned a transient fetch/network message instead of an evidence-backed answer."
-      : allClaims.length === 0
-        ? "The model produced no evidence-backed statements."
-        : "The available evidence did not produce a usable summary.";
+      : allClaims.length === 0 ? "The model produced no evidence-backed statements." : "The available evidence did not produce a usable summary.";
     return {
-      ...insufficientAnswer({
-        intent: params.intent,
-        question: params.question,
-        symbols,
-        reason,
-        providerId: params.providerId,
-      }),
+      ...insufficientAnswer({ intent: params.intent, question: params.question, symbols, reason, providerId: params.providerId }),
       missingInformation: [...new Set([reason, ...missingInformation])],
       model: params.model,
       droppedClaims: dropped.count,
     };
   }
 
+  // Confidence is now owned by the evidence-quality engine, not the model's
+  // self-reported number. A 100/100 score is possible only when coverage,
+  // reliability, freshness and consistency all genuinely reach 100.
   const qualityCap = Math.min(...contexts.map((context) => context.quality.overall));
-  const modelConfidence = Number(raw["confidence"]);
-  const confidence = Math.round(Math.max(0, Math.min(Number.isFinite(modelConfidence) ? Math.min(100, Math.max(0, modelConfidence)) : 50, qualityCap)));
+  const confidence = Math.round(Math.max(0, Math.min(100, qualityCap)));
 
   return {
     version: 1,
@@ -171,10 +161,10 @@ export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; questio
     summary,
     evidence: finalEvidence,
     technicalEvidence: finalTechnical,
-    fundamentalEvidence,
-    newsEvidence,
-    corporateEvents,
-    risks,
+    fundamentalEvidence: finalFundamental,
+    newsEvidence: finalNews,
+    corporateEvents: finalCorporate,
+    risks: finalRisks,
     missingInformation,
     confidence,
     sources: sourcesFor(contexts, citedIds),
