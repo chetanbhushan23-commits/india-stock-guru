@@ -11,6 +11,7 @@ import type { ResearchCollector, CollectorOutput } from "./research-collector";
 import { emptyOutput, toIso } from "./research-collector";
 import { mapFundamental, mapMarketQuote, mapNews, mapTechnical } from "./research-evidence";
 import { analyzeCandles } from "./technical-analysis";
+import type { Range } from "./technical-types";
 import { fetchYahooHistoryFallback } from "./yahoo-history-fallback.server";
 
 const failure = (error: unknown, fallback: string): CollectorOutput =>
@@ -56,7 +57,7 @@ export const technicalCollector: ResearchCollector = {
       // the entire technical domain. Retry through independent Yahoo chart
       // hosts with an expanded lookback so EMA/RSI/MACD/ADX can be computed.
       if (!analysis.ok) {
-        const fallbackRange = request.interval === "1d"
+        const fallbackRange: Range = request.interval === "1d"
           ? (request.range === "1mo" || request.range === "3mo" ? "1y" : request.range)
           : request.interval === "1wk"
             ? (request.range === "1mo" || request.range === "3mo" ? "2y" : request.range)
