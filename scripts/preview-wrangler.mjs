@@ -11,18 +11,26 @@ if (!existsSync(wranglerBin)) {
   process.exit(1);
 }
 
-// Windows cannot spawn .cmd files with shell:false. This was the cause of
-// `spawn EINVAL` on Node 24. Use the Windows command shell only for the
-// package shim; keep shell:false on POSIX systems.
-const child = spawn(
-  wranglerBin,
-  ["--cwd", ".", "dev", "--port", "3000", "--host", "localhost"],
-  {
-    stdio: "inherit",
-    shell: isWindows,
-    windowsHide: false,
-  },
-);
+const args = ["--cwd", ".", "dev", "--port", "3000", "--host", "localhost"];
+
+// Windows .cmd shims need cmd.exe, but using Node's `shell:true` emits a
+// Node 24 DEP0190 warning. Launch cmd.exe explicitly so the child process
+// remains shell:false while still supporting paths containing spaces.
+const child = isWindows
+  ? spawn(
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", `"${wranglerBin}" ${args.join(" ")}`],
+      {
+        stdio: "inherit",
+        shell: false,
+        windowsHide: false,
+      },
+    )
+  : spawn(wranglerBin, args, {
+      stdio: "inherit",
+      shell: false,
+      windowsHide: false,
+    });
 
 child.on("error", (error) => {
   console.error(`Unable to start Wrangler: ${error.message}`);
