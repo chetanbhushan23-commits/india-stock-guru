@@ -18,10 +18,9 @@ function valueText(item: ResearchEvidence): string {
 }
 
 /**
- * Creates one attributable, computed evidence item from already-collected
- * directional evidence. It never invents a price, indicator or source.
- * This prevents an AI provider from treating a valid technical evidence set
- * as "non-directional" merely because the model chose not to interpret it.
+ * Creates attributable computed trend evidence from already-collected facts.
+ * It deliberately keeps neutral technical trend facts: a sideways/neutral
+ * trend is still a valid answer and must not be mistaken for missing data.
  */
 export function addDirectionalEvidence(
   context: AISelectedContext,
@@ -29,26 +28,59 @@ export function addDirectionalEvidence(
 ): AISelectedContext {
   if (!TREND_INTENTS.includes(intent)) return context;
 
-  const technical = context.evidence.filter((item) => item.domain === "technical" && item.direction !== "neutral");
-  const market = context.evidence.filter((item) => item.domain === "market" && item.direction !== "neutral");
-  const candidates = technical.length ? technical : market;
+  const directionalTechnical = context.evidence.filter(
+    (item) => item.domain === "technical" && item.direction !== "neutral",
+  );
+  const trendTechnical = context.evidence.filter(
+    (item) =>
+      item.domain === "technical" &&
+      (item.tags.includes("trend") || item.key === "technical.trend" || item.key === "technical.supertrend"),
+  );
+  const directionalMarket = context.evidence.filter(
+    (item) => item.domain === "market" && item.direction !== "neutral",
+  );
+
+  // Prefer real directional technical signals. If they are unavailable,
+  // retain the engine's explicit trend classification before falling back to
+  // market direction. This prevents a valid "sideways/neutral" trend from
+  // becoming an artificial evidence gap.
+  const candidates = directionalTechnical.length
+    ? directionalTechnical
+    : trendTechnical.length
+      ? trendTechnical
+      : directionalMarket;
   if (!candidates.length) return context;
 
   const bullish = candidates.filter((item) => item.direction === "bullish");
   const bearish = candidates.filter((item) => item.direction === "bearish");
-  const score = (items: ResearchEvidence[]) =>
+  const neutral = candidates.filter((item) => item.direction === "neutral");
+  const weightedScore = (items: ResearchEvidence[]) =>
     items.reduce((sum, item) => sum + item.importance * Math.max(0, Math.min(1, item.reliability)), 0);
-  const bullScore = score(bullish);
-  const bearScore = score(bearish);
-  const total = bullScore + bearScore;
-  const direction = bullScore === bearScore ? "neutral" : bullScore > bearScore ? "bullish" : "bearish";
-  const confidence = total ? Math.round((Math.max(bullScore, bearScore) / total) * 100) : 0;
-  const strongest = [...candidates].sort((a, b) => b.importance - a.importance).slice(0, 6);
+  const bullScore = weightedScore(bullish);
+  const bearScore = weightedScore(bearish);
+  const neutralScore = weightedScore(neutral);
+  const directionalTotal = bullScore + bearScore;
+  const total = directionalTotal + neutralScore;
+  const direction =
+    directionalTotal === 0
+      ? "neutral"
+      : bullScore === bearScore
+        ? "neutral"
+        : bullScore > bearScore
+          ? "bullish"
+          : "bearish";
+  const confidence = total
+    ? Math.round((Math.max(bullScore, bearScore, neutralScore) / total) * 100)
+    : 0;
+  const strongest = [...candidates]
+    .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
+    .slice(0, 8);
   const evidenceIds = strongest.map((item) => item.id);
-  const label = technical.length ? "Technical directional synthesis" : "Market directional synthesis";
-  const statement = technical.length
+  const hasTechnical = candidates.some((item) => item.domain === "technical");
+  const label = hasTechnical ? "Technical directional synthesis" : "Market directional synthesis";
+  const statement = hasTechnical
     ? `${context.ticker} has a ${direction} technical bias based on ${strongest.map(valueText).join("; ")}. Directional evidence confidence: ${confidence}/100.`
-    : `${context.ticker} has a ${direction} market bias based on ${strongest.map(valueText).join("; ")}. Technical trend confirmation is not available in the current evidence set.`;
+    : `${context.ticker} has a ${direction} market bias based on ${strongest.map(valueText).join("; ")}. Technical confirmation is not available in the current evidence set.`;
 
   const synthesized: ResearchEvidence = {
     id: `derived:direction:${context.symbol}:${intent}`,
@@ -58,7 +90,7 @@ export function addDirectionalEvidence(
     value: { kind: "text", value: statement },
     direction,
     importance: 100,
-    reliability: Math.max(...strongest.map((item) => item.reliability), 0),
+    reliability: strongest.length ? Math.max(...strongest.map((item) => item.reliability)) : 0,
     origin: "computed",
     sourceId: "evidence-synthesis-engine",
     sourceName: "Evidence Synthesis Engine",
@@ -70,10 +102,10 @@ export function addDirectionalEvidence(
 
   return {
     ...context,
-    evidence: [...context.evidence, synthesized],
+    evidence: [...context.evidence.filter((item) => item.id !== synthesized.id), synthesized],
     byDomain: {
       ...context.byDomain,
-      technical: [...context.byDomain.technical, synthesized.id],
+      technical: [...context.byDomain.technical.filter((id) => id !== synthesized.id), synthesized.id],
     },
   };
 }
