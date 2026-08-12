@@ -1,10 +1,3 @@
-/**
- * Prompt construction + the strict JSON schema every provider must enforce.
- *
- * The model sees ONLY the selected ResearchContext, serialised as compact
- * JSON with stable evidence ids. Any statement it makes must cite those ids.
- */
-
 import type { AIRoutePlan, AISelectedContext } from "./ai-types";
 
 export const ANSWER_SCHEMA_NAME = "stock_research_answer";
@@ -77,7 +70,8 @@ ABSOLUTE RULES
 13. A derived directional-synthesis evidence item is a valid computed fact because it is explicitly derived from the cited evidence ids in its note. Cite the synthesis id and, where useful, its underlying evidence ids.
 14. Never call a context "non-directional" when it contains a directional-synthesis item or directional technical/market evidence. Explain mixed signals when bullish and bearish evidence materially conflict.
 15. SUMMARY REQUIREMENTS (this is the section the user reads first, so it must stand on its own): when evidence is sufficient, write 3-6 sentences, not one. Open with the direct answer to the question, then walk through the specific drivers in descending order of importance, naming concrete figures, percentages, indicator names/levels, or dated news events pulled from the evidence — never a vague phrase like "market factors" or "various reasons" without naming them. Mention the single most important number or fact from each evidence domain you drew on (market, technical, fundamental, news) when it is relevant to the question. If bullish and bearish evidence conflict, say so explicitly and name both sides. Close with the most material caveat or missing domain if one exists. The summary must be readable without opening the evidence sections below it, and every specific figure or claim it makes must also appear in a cited evidenceIds entry elsewhere in the answer.
-16. Do not pad the summary with filler sentences that restate the question or generic disclaimers — every sentence must carry a specific, evidence-backed fact.`;
+16. Do not pad the summary with filler sentences that restate the question or generic disclaimers — every sentence must carry a specific, evidence-backed fact.
+17. For a current-trend question, the first sentence MUST state the current evidence-derived bias: bullish, bearish, or neutral/sideways. If the supplied technical directional synthesis is neutral, say "neutral/sideways" rather than saying that there is not enough directional evidence. Treat a neutral trend as a valid result, not as missing data.`;
 
 const compactEvidence = (context: AISelectedContext) =>
   context.evidence.map((item) => ({
@@ -145,5 +139,6 @@ export function buildUserPrompt(
     "",
     "Answer as JSON matching the required schema. Cite evidence ids in every statement. If requested domains are missing, disclose them in missingInformation and answer from the available evidence without inventing anything.",
     "Write the summary as 3-6 sentences naming specific figures, indicator levels, dates and news events from the evidence above — do not return a one-line or generic summary when sufficient evidence exists.",
+    "For current-trend questions, lead with the explicit bias from the technical directional synthesis: bullish, bearish, or neutral/sideways. Never describe a neutral/sideways synthesis as insufficient directional evidence.",
   ].join("\n");
 }
