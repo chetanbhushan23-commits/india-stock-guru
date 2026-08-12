@@ -1,10 +1,6 @@
 /**
  * AIResponseFormatter — validates and normalises raw model JSON into the
  * mandatory 10-part AIAnswer.
- *
- * This is the guardrail that enforces "never invent facts": any claim citing
- * an evidence id that is not in the selected context is dropped, and the
- * confidence score is capped by the measured evidence quality.
  */
 
 import { sourcesFor } from "./ai-context-selector";
@@ -21,11 +17,7 @@ type RawAnswer = Record<string, unknown>;
 
 const asString = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
-function normaliseClaims(
-  raw: unknown,
-  knownIds: Set<string>,
-  dropped: { count: number },
-): AIClaim[] {
+function normaliseClaims(raw: unknown, knownIds: Set<string>, dropped: { count: number }): AIClaim[] {
   if (!Array.isArray(raw)) return [];
   const out: AIClaim[] = [];
   for (const entry of raw as RawClaim[]) {
@@ -45,9 +37,7 @@ function normaliseClaims(
 
 export function parseModelJson(raw: string): RawAnswer | null {
   const trimmed = raw.trim();
-  const candidate = trimmed.startsWith("{")
-    ? trimmed
-    : trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1);
+  const candidate = trimmed.startsWith("{") ? trimmed : trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1);
   if (!candidate) return null;
   try {
     const parsed: unknown = JSON.parse(candidate);
@@ -57,15 +47,7 @@ export function parseModelJson(raw: string): RawAnswer | null {
   }
 }
 
-/** Answer returned when the evidence bar is not met. */
-export function insufficientAnswer(params: {
-  intent: AIIntent;
-  question: string;
-  symbols: string[];
-  reason: string;
-  providerId: string;
-  missing?: string[];
-}): AIAnswer {
+export function insufficientAnswer(params: { intent: AIIntent; question: string; symbols: string[]; reason: string; providerId: string; missing?: string[] }): AIAnswer {
   return {
     version: 1,
     intent: params.intent,
@@ -89,18 +71,36 @@ export function insufficientAnswer(params: {
   };
 }
 
-export function formatAnswer(params: {
-  raw: RawAnswer;
-  intent: AIIntent;
-  question: string;
-  contexts: AISelectedContext[];
-  providerId: string;
-  model: string | null;
-}): AIAnswer {
+const TREND_INTENTS: AIIntent[] = ["technical-analysis", "swing-trade", "explain-movement", "why-rise", "why-fall", "buy-or-wait"];
+
+function trendFallback(contexts: AISelectedContext[], intent: AIIntent): { summary: string; evidence: AIClaim[]; technicalEvidence: AIClaim[] } | null {
+  if (!TREND_INTENTS.includes(intent)) return null;
+  const context = contexts[0];
+  if (!context) return null;
+  const synthesis = context.evidence.find((item) => item.key === "technical.directionalSynthesis");
+  if (!synthesis) return null;
+  const supporting = context.evidence
+    .filter((item) => item.domain === "technical" && item.id !== synthesis.id)
+    .sort((a, b) => b.importance * b.reliability - a.importance * a.reliability)
+    .slice(0, 4);
+  const direction = synthesis.direction === "bullish" ? "bullish" : synthesis.direction === "bearish" ? "bearish" : "neutral/sideways";
+  const synthesisText = synthesis.value.kind === "text" ? synthesis.value.value : `${context.ticker} has a ${direction} technical bias.`;
+  const supportingText = supporting.length
+    ? `Key supporting indicators include ${supporting.map((item) => item.label + (item.value.kind === "number" ? ` at ${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : "")).join(", ")}.`
+    : "The available technical evidence is limited, so the bias should be treated as qualified.";
+  const summary = `${context.ticker}'s current evidence-derived technical bias is ${direction}. ${synthesisText} ${supportingText} This conclusion is based only on the verified research context.`;
+  const mainClaim: AIClaim = { statement: synthesisText, evidenceIds: [synthesis.id] };
+  const supportClaims: AIClaim[] = supporting.map((item) => ({
+    statement: `${item.label}: ${item.value.kind === "number" ? `${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : item.value.kind === "text" ? item.value.value : "available"}`,
+    evidenceIds: [item.id],
+  }));
+  return { summary, evidence: [mainClaim], technicalEvidence: [mainClaim, ...supportClaims] };
+}
+
+export function formatAnswer(params: { raw: RawAnswer; intent: AIIntent; question: string; contexts: AISelectedContext[]; providerId: string; model: string | null }): AIAnswer {
   const { raw, contexts } = params;
   const knownIds = new Set(contexts.flatMap((context) => context.evidence.map((item) => item.id)));
   const dropped = { count: 0 };
-
   const evidence = normaliseClaims(raw["evidence"], knownIds, dropped);
   const technicalEvidence = normaliseClaims(raw["technicalEvidence"], knownIds, dropped);
   const fundamentalEvidence = normaliseClaims(raw["fundamentalEvidence"], knownIds, dropped);
@@ -108,65 +108,40 @@ export function formatAnswer(params: {
   const corporateEvents = normaliseClaims(raw["corporateEvents"], knownIds, dropped);
   const risks = normaliseClaims(raw["risks"], knownIds, dropped);
 
-  const allClaims = [
-    ...evidence,
-    ...technicalEvidence,
-    ...fundamentalEvidence,
-    ...newsEvidence,
-    ...corporateEvents,
-    ...risks,
-  ];
+  const fallback = trendFallback(contexts, params.intent);
+  const finalEvidence = evidence.length ? evidence : fallback?.evidence ?? [];
+  const finalTechnical = technicalEvidence.length ? technicalEvidence : fallback?.technicalEvidence ?? [];
+  const allClaims = [...finalEvidence, ...finalTechnical, ...fundamentalEvidence, ...newsEvidence, ...corporateEvents, ...risks];
   const citedIds = new Set(allClaims.flatMap((claim) => claim.evidenceIds));
-
   const symbols = contexts.map((context) => context.symbol);
   const modelSaysInsufficient = raw["insufficient"] === true;
-  const summary = asString(raw["summary"]);
+  const modelSummary = asString(raw["summary"]);
+  const summary = modelSummary && !modelSaysInsufficient ? modelSummary : fallback?.summary ?? modelSummary;
 
-  const gapNotes = contexts.flatMap((context) =>
-    context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`),
-  );
+  const gapNotes = contexts.flatMap((context) => context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`));
   const modelMissing = Array.isArray(raw["missingInformation"])
     ? (raw["missingInformation"] as unknown[]).map(asString).filter(Boolean)
     : [];
   const missingInformation = [...new Set([...modelMissing, ...gapNotes])];
 
-  if (modelSaysInsufficient || allClaims.length === 0 || !summary) {
+  if (allClaims.length === 0 || !summary) {
     return {
       ...insufficientAnswer({
         intent: params.intent,
         question: params.question,
         symbols,
-        reason:
-          allClaims.length === 0
-            ? "The model produced no evidence-backed statements."
-            : "The model reported that the available evidence is not sufficient.",
+        reason: allClaims.length === 0 ? "The model produced no evidence-backed statements." : "The available evidence did not produce a usable summary.",
         providerId: params.providerId,
       }),
-      missingInformation: [
-        ...new Set([
-          allClaims.length === 0
-            ? "The model produced no evidence-backed statements."
-            : "The model reported that the available evidence is not sufficient.",
-          ...missingInformation,
-        ]),
-      ],
+      missingInformation: [...new Set([allClaims.length === 0 ? "The model produced no evidence-backed statements." : "The available evidence did not produce a usable summary.", ...missingInformation])],
       model: params.model,
       droppedClaims: dropped.count,
     };
   }
 
-  // Confidence never exceeds the measured quality of the evidence it rests on.
   const qualityCap = Math.min(...contexts.map((context) => context.quality.overall));
   const modelConfidence = Number(raw["confidence"]);
-  const confidence = Math.round(
-    Math.max(
-      0,
-      Math.min(
-        Number.isFinite(modelConfidence) ? Math.min(100, Math.max(0, modelConfidence)) : 50,
-        qualityCap,
-      ),
-    ),
-  );
+  const confidence = Math.round(Math.max(0, Math.min(Number.isFinite(modelConfidence) ? Math.min(100, Math.max(0, modelConfidence)) : 50, qualityCap)));
 
   return {
     version: 1,
@@ -174,8 +149,8 @@ export function formatAnswer(params: {
     symbols,
     question: params.question,
     summary,
-    evidence,
-    technicalEvidence,
+    evidence: finalEvidence,
+    technicalEvidence: finalTechnical,
     fundamentalEvidence,
     newsEvidence,
     corporateEvents,
