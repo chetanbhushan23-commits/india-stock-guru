@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { Brain, ExternalLink, Loader2 } from "lucide-react";
+import { askAI } from "@/lib/ai.functions";
 import { getHistory } from "@/lib/technical.functions";
 import type { Candle, Interval, Range } from "@/lib/technical-types";
 import { num, stripSuffix, type Quote } from "@/lib/market-types";
@@ -16,11 +18,6 @@ const TIMEFRAMES: Timeframe[] = [
   { label: "1Y", interval: "1mo", range: "max", description: "Long-term monthly view" },
 ];
 
-function average(values: number[], index: number, period: number) {
-  if (index < period - 1) return null;
-  const slice = values.slice(index - period + 1, index + 1);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
 function ema(values: number[], period: number) {
   const out: (number | null)[] = Array(values.length).fill(null);
   if (values.length < period) return out;
@@ -76,10 +73,13 @@ export function ChartPanel({ quote, symbol, isLoading }: { quote: Quote | null |
   const [showSma200, setShowSma200] = useState(false);
   const [showVwap, setShowVwap] = useState(false);
   const [showRsi, setShowRsi] = useState(false);
+  const [chartReading, setChartReading] = useState(false);
+  const [chartRead, setChartRead] = useState("");
+  const [chartReadError, setChartReadError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); setError(null); setSelectedCandle(null);
+    setLoading(true); setError(null); setSelectedCandle(null); setChartRead(""); setChartReadError("");
     getHistory({ data: { symbol, interval: timeframe.interval, range: timeframe.range } })
       .then((result) => {
         if (cancelled) return;
@@ -95,7 +95,7 @@ export function ChartPanel({ quote, symbol, isLoading }: { quote: Quote | null |
   const closes = visible.map((c) => c.close);
   const ema20 = ema(closes, 20);
   const ema50 = ema(closes, 50);
-  const sma200 = ema(closes, 200); // same visual role as a 200-period long trend line, using the same stable seed method.
+  const sma200 = ema(closes, 200);
   const rsi14 = rsi(closes, 14);
   const vwap = useMemo(() => {
     let pv = 0, vol = 0;
@@ -121,15 +121,36 @@ export function ChartPanel({ quote, symbol, isLoading }: { quote: Quote | null |
   const volumeMax = visible.length ? Math.max(...visible.map((c) => c.volume), 1) : 1;
   const ticks = [0, .25, .5, .75, 1].map((p) => ({ p, value: max - (max - min) * p }));
   const latestEma20 = ema20.at(-1), latestEma50 = ema50.at(-1), latestSma200 = sma200.at(-1), latestVwap = vwap.at(-1), latestRsi = rsi14.at(-1);
+  const tradingViewSymbol = `${exchange}:${ticker}`;
+  const tradingViewUrl = `https://www.tradingview.com/symbols/${encodeURIComponent(exchange)}-${encodeURIComponent(ticker)}/`;
+
+  async function readChart() {
+    if (!candles.length || chartReading) return;
+    setChartReading(true); setChartReadError("");
+    const latestCandle = candles.at(-1);
+    const question = `Read the current ${tradingViewSymbol} ${timeframe.label} TradingView-style chart using the available technical evidence. Focus on price structure, latest candle, 20 EMA ${latestEma20?.toFixed(2) ?? "NA"}, 50 EMA ${latestEma50?.toFixed(2) ?? "NA"}, 200 trend ${latestSma200?.toFixed(2) ?? "NA"}, VWAP ${latestVwap?.toFixed(2) ?? "NA"}, RSI 14 ${latestRsi?.toFixed(1) ?? "NA"}. Latest OHLC: O ${latestCandle?.open.toFixed(2) ?? "NA"}, H ${latestCandle?.high.toFixed(2) ?? "NA"}, L ${latestCandle?.low.toFixed(2) ?? "NA"}, C ${latestCandle?.close.toFixed(2) ?? "NA"}. Give a concise English + Hindi chart reading: trend, support/resistance context, momentum, and what would confirm or invalidate the setup. Do not claim to see pixels or drawings that are not in the supplied data.`;
+    try {
+      const result = await askAI({ data: { question, symbols: [symbol] } });
+      if (result.ok) setChartRead(result.data.summary || "Insufficient verified evidence for a chart reading.");
+      else setChartReadError(result.error.message);
+    } catch (e) {
+      setChartReadError(e instanceof Error ? e.message : "Unable to read the chart.");
+    } finally {
+      setChartReading(false);
+    }
+  }
 
   return <section className="panel p-4 sm:p-5" aria-label={`${ticker} candlestick chart`}>
     <header className="flex items-start justify-between gap-3">
-      <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-lg font-bold sm:text-xl">{ticker}</h2><span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{exchange}</span></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{timeframe.description}</p></div>
+      <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-lg font-bold sm:text-xl">{ticker}</h2><span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{exchange}</span><span className="rounded border border-border px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">TradingView-style</span></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{timeframe.description}</p></div>
       <div className="shrink-0 text-right"><p className="num text-lg font-bold sm:text-2xl">{num(quote?.price ?? latest?.close ?? null)}</p><Delta change={quote?.change ?? null} changePercent={quote?.changePercent ?? change} /></div>
     </header>
 
     <div className="mt-4 flex flex-wrap gap-1.5 rounded-xl border border-border bg-surface-2/40 p-1.5">
       {TIMEFRAMES.map((item) => <button key={item.label} type="button" onClick={() => setTimeframe(item)} className={cn("rounded-lg px-3 py-1.5 text-xs font-bold transition-colors", timeframe.label === item.label ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground")}>{item.label}</button>)}
+      <span className="mx-1 hidden h-6 w-px bg-border sm:block" />
+      <button type="button" onClick={() => void readChart()} disabled={chartReading || loading || !candles.length} className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"><Brain className="h-3.5 w-3.5" />{chartReading ? "Reading chart…" : "AI Read Chart"}</button>
+      <a href={tradingViewUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"><ExternalLink className="h-3.5 w-3.5" />TradingView</a>
     </div>
 
     <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
@@ -162,6 +183,14 @@ export function ChartPanel({ quote, symbol, isLoading }: { quote: Quote | null |
         {visible.filter((_, i) => i === 0 || i === visible.length - 1 || i % Math.max(1, Math.floor(visible.length / 5)) === 0).map((c) => { const i = visible.indexOf(c); return <text key={c.time} x={left + i * step + step / 2} y={H - 8} textAnchor="middle" fontSize="10" fill="currentColor" opacity=".65">{dateLabel(c.time, timeframe.interval)}</text>; })}
       </svg>}
     </div>
-    <p className="mt-2 text-[11px] text-muted-foreground">Candles + trend overlays are calculated from the returned OHLCV history. 20 EMA and 50 EMA are enabled by default; 200 Trend, VWAP and RSI 14 can be turned on for deeper analysis.</p>
+
+    {(chartReading || chartRead || chartReadError) && <section className="mt-3 rounded-xl border border-primary/20 bg-primary/5 p-3 sm:p-4" aria-live="polite">
+      <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary" /><p className="text-xs font-bold uppercase tracking-wider text-primary">AI Chart Reading</p></div>{chartReading && <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Reading {timeframe.label} chart…</span>}</div>
+      {chartReading && <p className="mt-2 text-xs text-muted-foreground">Gemini is checking the technical evidence, price structure and latest market context. The app is not pretending to inspect pixels or unavailable drawings.</p>}
+      {chartReadError && !chartReading && <p className="mt-2 text-xs text-destructive">{chartReadError}</p>}
+      {chartRead && !chartReading && <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-foreground/90">{chartRead}</p>}
+    </section>}
+
+    <p className="mt-2 text-[11px] text-muted-foreground">TradingView-style chart UI uses the app's returned OHLCV history. AI Chart Reading uses the same candle/indicator context plus the evidence-backed Gemini research pipeline; the external TradingView button opens the live TradingView symbol page.</p>
   </section>;
 }
