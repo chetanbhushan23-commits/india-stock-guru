@@ -1,142 +1,110 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bar, CartesianGrid, Cell, ComposedChart, Line, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Link } from "@tanstack/react-router";
 import { getHistory } from "@/lib/technical.functions";
-import { compactInr, compactVolume, num, stripSuffix, type Quote } from "@/lib/market-types";
+import type { Candle, Interval, Range } from "@/lib/technical-types";
+import { num, stripSuffix, type Quote } from "@/lib/market-types";
 import { Delta } from "./Delta";
-import { StatTile } from "./StatTile";
 import { cn } from "@/lib/utils";
 
-const RANGES = [
-  { label: "1M", range: "1mo" }, { label: "3M", range: "3mo" }, { label: "6M", range: "6mo" },
-  { label: "1Y", range: "1y" }, { label: "2Y", range: "2y" }, { label: "5Y", range: "5y" },
-] as const;
-const SMA20_COLOR = "#f59e0b";
-const SMA50_COLOR = "#38bdf8";
-const EMA20_COLOR = "#a78bfa";
-const EMA50_COLOR = "#34d399";
-const RSI_COLOR = "#f97316";
-const MACD_COLOR = "#ec4899";
-const MACD_SIGNAL_COLOR = "#8b5cf6";
-const MACD_HISTOGRAM_POSITIVE_COLOR = "#22c55e";
-const MACD_HISTOGRAM_NEGATIVE_COLOR = "#ef4444";
-const SUPPORT_RESISTANCE_COLOR = "#facc15";
+type Timeframe = { label: string; interval: Interval; range: Range; description: string };
+const TIMEFRAMES: Timeframe[] = [
+  { label: "1m", interval: "1m", range: "5d", description: "1-minute candles · last 5 days" },
+  { label: "5m", interval: "5m", range: "1mo", description: "5-minute candles · last month" },
+  { label: "15m", interval: "15m", range: "1mo", description: "15-minute candles · last month" },
+  { label: "1H", interval: "1h", range: "6mo", description: "1-hour candles · last 6 months" },
+  { label: "1D", interval: "1d", range: "1y", description: "Daily candles · last year" },
+  { label: "1M", interval: "1mo", range: "5y", description: "Monthly candles · last 5 years" },
+  { label: "1Y", interval: "1mo", range: "max", description: "Long-term monthly view" },
+];
 
-type RangeValue = (typeof RANGES)[number]["range"];
-type ChartPoint = {
-  time: number; open: number; high: number; low: number; close: number; volume: number; label: string;
-  sma20: number | null; sma50: number | null; ema20: number | null; ema50: number | null;
-  rsi: number | null; macd: number | null; macdSignal: number | null; macdHistogram: number | null;
-  supportLevel: number | null; resistanceLevel: number | null;
-};
-
-function formatDate(timestamp: number, range: RangeValue) {
-  const date = new Date(timestamp);
-  return date.toLocaleDateString("en-IN", range === "5y" || range === "2y" ? { month: "short", year: "2-digit" } : { day: "2-digit", month: "short" });
-}
-function formatTooltipDate(timestamp: number) {
-  return new Date(timestamp).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-}
 function sma(values: number[], index: number, period: number) {
   if (index < period - 1) return null;
-  const slice = values.slice(index - period + 1, index + 1);
-  return slice.reduce((sum, value) => sum + value, 0) / period;
+  return values.slice(index - period + 1, index + 1).reduce((a, b) => a + b, 0) / period;
 }
-function emaSeries(values: number[], period: number) {
-  const result: Array<number | null> = Array(values.length).fill(null);
-  if (values.length < period) return result;
-  let previous = values.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
-  result[period - 1] = previous;
-  const multiplier = 2 / (period + 1);
-  for (let i = period; i < values.length; i += 1) {
-    previous = (values[i] - previous) * multiplier + previous;
-    result[i] = previous;
-  }
-  return result;
+function dateLabel(time: number, interval: Interval) {
+  const d = new Date(time);
+  return interval === "1m" || interval === "5m" || interval === "15m" || interval === "1h"
+    ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" });
 }
-function rsiSeries(values: number[], period = 14) {
-  const result: Array<number | null> = Array(values.length).fill(null);
-  if (values.length <= period) return result;
-  let gains = 0, losses = 0;
-  for (let i = 1; i <= period; i += 1) { const change = values[i] - values[i - 1]; if (change >= 0) gains += change; else losses -= change; }
-  let averageGain = gains / period, averageLoss = losses / period;
-  result[period] = averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
-  for (let i = period + 1; i < values.length; i += 1) {
-    const change = values[i] - values[i - 1];
-    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
-    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
-    result[i] = averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
-  }
-  return result;
+function CandleBody({ x, yOpen, yClose, yHigh, yLow, width, bullish }: { x: number; yOpen: number; yClose: number; yHigh: number; yLow: number; width: number; bullish: boolean }) {
+  const top = Math.min(yOpen, yClose), height = Math.max(1.5, Math.abs(yClose - yOpen));
+  return <g>
+    <line x1={x + width / 2} x2={x + width / 2} y1={yHigh} y2={yLow} stroke={bullish ? "#22c55e" : "#ef4444"} strokeWidth={1.2} />
+    <rect x={x} y={top} width={width} height={height} rx={0.8} fill={bullish ? "#22c55e" : "#ef4444"} />
+  </g>;
 }
 
-export function ChartPanel({ quote, symbol, isLoading, linkToDetails = true }: { quote: Quote | null | undefined; symbol: string; isLoading?: boolean; linkToDetails?: boolean }) {
+export function ChartPanel({ quote, symbol, isLoading }: { quote: Quote | null | undefined; symbol: string; isLoading?: boolean; linkToDetails?: boolean }) {
   const ticker = quote?.ticker ?? stripSuffix(symbol);
   const exchange = quote?.exchange ?? (symbol.endsWith(".BO") ? "BSE" : "NSE");
-  const [selectedRange, setSelectedRange] = useState<RangeValue>("1y");
-  const [points, setPoints] = useState<ChartPoint[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [showSma20, setShowSma20] = useState(true), [showSma50, setShowSma50] = useState(false), [showEma20, setShowEma20] = useState(false), [showEma50, setShowEma50] = useState(false);
-  const [showRsi, setShowRsi] = useState(false), [showMacd, setShowMacd] = useState(false), [showSupportResistance, setShowSupportResistance] = useState(false);
+  const [timeframe, setTimeframe] = useState<Timeframe>(TIMEFRAMES[4]);
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedCandle, setSelectedCandle] = useState<Candle | null>(null);
+  const [showSma20, setShowSma20] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    setHistoryLoading(true); setHistoryError(null);
-    getHistory({ data: { symbol, interval: "1d", range: selectedRange } }).then((result) => {
-      if (cancelled) return;
-      if (!result.ok) { setPoints([]); setHistoryError(result.error.message); return; }
-      const candles = result.candles, closes = candles.map((c) => c.close);
-      const ema20 = emaSeries(closes, 20), ema50 = emaSeries(closes, 50), rsi = rsiSeries(closes, 14);
-      const fast = emaSeries(closes, 12), slow = emaSeries(closes, 26);
-      const macd = closes.map((_, i) => fast[i] !== null && slow[i] !== null ? fast[i]! - slow[i]! : null);
-      const signal = emaSeries(macd.map((v) => v ?? 0), 9).map((v, i) => macd[i] === null ? null : v);
-      const recentCandles = candles.slice(-20);
-      const supportLevel = recentCandles.length > 0 ? Math.min(...recentCandles.map((c) => c.low)) : null;
-      const resistanceLevel = recentCandles.length > 0 ? Math.max(...recentCandles.map((c) => c.high)) : null;
-      setPoints(candles.map((c, i) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, label: formatDate(c.time, selectedRange), sma20: sma(closes, i, 20), sma50: sma(closes, i, 50), ema20: ema20[i], ema50: ema50[i], rsi: rsi[i], macd: macd[i], macdSignal: signal[i], macdHistogram: macd[i] !== null && signal[i] !== null ? macd[i]! - signal[i]! : null, supportLevel, resistanceLevel })));
-    }).catch((error) => { if (!cancelled) { setPoints([]); setHistoryError(error instanceof Error ? error.message : "Unable to load chart data."); } }).finally(() => { if (!cancelled) setHistoryLoading(false); });
+    setLoading(true); setError(null); setSelectedCandle(null);
+    getHistory({ data: { symbol, interval: timeframe.interval, range: timeframe.range } })
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) { setCandles([]); setError(result.error.message); return; }
+        setCandles(result.candles);
+      })
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Unable to load chart data."))
+      .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [symbol, selectedRange]);
+  }, [symbol, timeframe]);
 
-  const chartData = useMemo(() => {
-    if (points.length <= 180) return points;
-    const step = Math.ceil(points.length / 180);
-    return points.filter((_, i) => i % step === 0 || i === points.length - 1);
-  }, [points]);
-  const macdCrossovers = useMemo(() => chartData.flatMap((point, index) => {
-    const previous = chartData[index - 1];
-    if (!previous || point.macd === null || point.macdSignal === null || previous.macd === null || previous.macdSignal === null) return [];
-    const bullish = previous.macd <= previous.macdSignal && point.macd > point.macdSignal;
-    const bearish = previous.macd >= previous.macdSignal && point.macd < point.macdSignal;
-    return bullish || bearish ? [{ point, bullish }] : [];
-  }), [chartData]);
-  const latestClose = points.at(-1)?.close ?? quote?.price ?? null;
-  const firstClose = points[0]?.close ?? latestClose;
-  const periodChange = latestClose !== null && firstClose !== null && firstClose !== 0 ? ((latestClose - firstClose) / firstClose) * 100 : null;
-  const overlays = [
-    { key: "sma20", label: "SMA 20", active: showSma20, setActive: setShowSma20, color: SMA20_COLOR },
-    { key: "sma50", label: "SMA 50", active: showSma50, setActive: setShowSma50, color: SMA50_COLOR },
-    { key: "ema20", label: "EMA 20", active: showEma20, setActive: setShowEma20, color: EMA20_COLOR },
-    { key: "ema50", label: "EMA 50", active: showEma50, setActive: setShowEma50, color: EMA50_COLOR },
-    { key: "rsi", label: "RSI 14", active: showRsi, setActive: setShowRsi, color: RSI_COLOR },
-    { key: "macd", label: "MACD", active: showMacd, setActive: setShowMacd, color: MACD_COLOR },
-    { key: "supportResistance", label: "S/R 20", active: showSupportResistance, setActive: setShowSupportResistance, color: SUPPORT_RESISTANCE_COLOR },
-  ] as const;
+  const visible = useMemo(() => candles.length > 140 ? candles.slice(-140) : candles, [candles]);
+  const closes = visible.map((c) => c.close);
+  const latest = candles.at(-1);
+  const first = candles[0];
+  const change = latest && first && first.close ? ((latest.close - first.close) / first.close) * 100 : null;
+  const priceMin = visible.length ? Math.min(...visible.map((c) => c.low)) : 0;
+  const priceMax = visible.length ? Math.max(...visible.map((c) => c.high)) : 1;
+  const padding = (priceMax - priceMin) * 0.08 || 1;
+  const min = priceMin - padding, max = priceMax + padding;
+  const W = 1200, H = 430, top = 18, bottom = 48, left = 64, right = 18;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const y = (value: number) => top + ((max - value) / (max - min)) * plotH;
+  const step = visible.length ? plotW / visible.length : plotW;
+  const bodyWidth = Math.max(2, Math.min(10, step * 0.62));
+  const sma20 = visible.map((_, i) => sma(closes, i, 20));
+  const smaPath = sma20.map((v, i) => v === null ? "" : `${left + i * step + step / 2},${y(v)}`).filter(Boolean).join(" ");
+  const volumeMax = visible.length ? Math.max(...visible.map((c) => c.volume), 1) : 1;
+  const ticks = [0, .25, .5, .75, 1].map((p) => ({ p, value: max - (max - min) * p }));
 
-  return <section className="panel p-4 sm:p-5" aria-label={`${ticker} chart`}>
-    <header className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:flex sm:items-center sm:justify-between">
-      <div className="min-w-0"><div className="flex min-w-0 items-center gap-2"><h2 className="truncate text-lg font-bold sm:text-xl">{ticker}</h2><span className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{exchange}</span></div><p className="truncate text-xs text-muted-foreground">{isLoading ? "Fetching latest quote…" : (quote?.name ?? symbol)}</p></div>
-      <div className="shrink-0 text-right"><p className="num text-lg font-bold sm:text-2xl">{num(quote?.price ?? latestClose)}</p><Delta change={quote?.change ?? null} changePercent={quote?.changePercent ?? periodChange} /></div>
+  return <section className="panel p-4 sm:p-5" aria-label={`${ticker} candlestick chart`}>
+    <header className="flex items-start justify-between gap-3">
+      <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-lg font-bold sm:text-xl">{ticker}</h2><span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{exchange}</span></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{timeframe.description}</p></div>
+      <div className="shrink-0 text-right"><p className="num text-lg font-bold sm:text-2xl">{num(quote?.price ?? latest?.close ?? null)}</p><Delta change={quote?.change ?? null} changePercent={quote?.changePercent ?? change} /></div>
     </header>
-    <div className="mt-4 flex flex-wrap gap-1.5">{RANGES.map(({ label, range }) => <button key={range} type="button" onClick={() => setSelectedRange(range)} className={cn("num rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors", selectedRange === range ? "bg-primary text-primary-foreground" : "bg-surface-2/70 text-muted-foreground hover:text-foreground")}>{label}</button>)}</div>
-    <div className="mt-2 flex flex-wrap gap-1.5">{overlays.map(({ key, label, active, setActive, color }) => <button key={key} type="button" onClick={() => setActive(!active)} style={{ color, borderColor: color }} className={cn("rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors", active ? "bg-primary/10" : "bg-surface-2/50 hover:text-foreground")}>{label}</button>)}</div>
-    <div className="mt-3 h-56 rounded-xl border border-border bg-surface-2/40 p-2 sm:h-72">
-      {historyLoading ? <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading historical prices…</div> : historyError ? <div className="grid h-full place-items-center px-6 text-center"><div><p className="text-sm font-semibold">Chart data unavailable</p><p className="mt-1 text-xs text-muted-foreground">{historyError}</p></div></div> : chartData.length === 0 ? <div className="grid h-full place-items-center text-sm text-muted-foreground">No historical data available.</div> : <ResponsiveContainer width="100%" height="100%"><ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" className="stroke-border/50" /><XAxis dataKey="time" tickFormatter={(v) => formatDate(Number(v), selectedRange)} tick={{ fontSize: 10 }} minTickGap={28} axisLine={false} tickLine={false} /><YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fontSize: 10 }} tickFormatter={(v) => `₹${Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`} width={58} axisLine={false} tickLine={false} /><YAxis yAxisId="volume" orientation="right" hide domain={[0, "auto"]} /><Tooltip labelFormatter={(v) => formatTooltipDate(Number(v))} formatter={(value, name) => [name === "close" || String(name).startsWith("sma") || String(name).startsWith("ema") ? `₹${Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : compactVolume(Number(value)), name === "close" ? "Close" : String(name).toUpperCase()]} contentStyle={{ borderRadius: 10, border: "1px solid hsl(var(--border))", background: "hsl(var(--background))", fontSize: 12 }} /><Bar yAxisId="volume" dataKey="volume" fill="currentColor" className="text-primary/15" barSize={3} isAnimationActive={false} /><Line yAxisId="price" type="monotone" dataKey="close" stroke="currentColor" className="text-foreground" strokeWidth={2} dot={false} isAnimationActive={false} />{showSupportResistance && <><Line yAxisId="price" type="linear" dataKey="supportLevel" name="Support" stroke={MACD_HISTOGRAM_POSITIVE_COLOR} strokeWidth={2} strokeDasharray="8 4" dot={false} isAnimationActive={false} /><Line yAxisId="price" type="linear" dataKey="resistanceLevel" name="Resistance" stroke={MACD_HISTOGRAM_NEGATIVE_COLOR} strokeWidth={2} strokeDasharray="8 4" dot={false} isAnimationActive={false} /></>}{showSma20 && <Line yAxisId="price" type="monotone" dataKey="sma20" stroke={SMA20_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} />}{showSma50 && <Line yAxisId="price" type="monotone" dataKey="sma50" stroke={SMA50_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} />}{showEma20 && <Line yAxisId="price" type="monotone" dataKey="ema20" stroke={EMA20_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} />}{showEma50 && <Line yAxisId="price" type="monotone" dataKey="ema50" stroke={EMA50_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} />}</ComposedChart></ResponsiveContainer>}
+
+    <div className="mt-4 flex flex-wrap gap-1.5 rounded-xl border border-border bg-surface-2/40 p-1.5">
+      {TIMEFRAMES.map((item) => <button key={item.label} type="button" onClick={() => setTimeframe(item)} className={cn("rounded-lg px-3 py-1.5 text-xs font-bold transition-colors", timeframe.label === item.label ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground")}>{item.label}</button>)}
     </div>
-    {showRsi && <div className="mt-3 h-36 rounded-xl border border-border bg-surface-2/40 p-2"><p className="px-2 py-1 text-xs font-semibold" style={{ color: RSI_COLOR }}>RSI (14)</p><ResponsiveContainer width="100%" height="85%"><ComposedChart data={chartData}><CartesianGrid strokeDasharray="3 3" className="stroke-border/50" /><XAxis dataKey="time" hide /><YAxis domain={[0, 100]} ticks={[30, 50, 70]} tick={{ fontSize: 9 }} width={28} axisLine={false} tickLine={false} /><ReferenceLine y={70} stroke="currentColor" strokeDasharray="4 4" className="text-red-400/60" /><ReferenceLine y={30} stroke="currentColor" strokeDasharray="4 4" className="text-green-400/60" /><Line type="monotone" dataKey="rsi" stroke={RSI_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} /><Tooltip formatter={(v) => [Number(v).toFixed(2), "RSI"]} labelFormatter={(v) => formatTooltipDate(Number(v))} /></ComposedChart></ResponsiveContainer></div>}
-    {showMacd && <div className="mt-3 h-36 rounded-xl border border-border bg-surface-2/40 p-2"><p className="px-2 py-1 text-xs font-semibold" style={{ color: MACD_COLOR }}>MACD (12, 26, 9)</p><ResponsiveContainer width="100%" height="85%"><ComposedChart data={chartData}><CartesianGrid strokeDasharray="3 3" className="stroke-border/50" /><XAxis dataKey="time" hide /><YAxis tick={{ fontSize: 9 }} width={48} axisLine={false} tickLine={false} /><ReferenceLine y={0} stroke="currentColor" strokeDasharray="4 4" className="text-muted-foreground/60" /><Bar dataKey="macdHistogram" isAnimationActive={false}>{chartData.map((point) => <Cell key={point.time} fill={point.macdHistogram !== null && point.macdHistogram >= 0 ? MACD_HISTOGRAM_POSITIVE_COLOR : MACD_HISTOGRAM_NEGATIVE_COLOR} />)}</Bar><Line type="monotone" dataKey="macd" stroke={MACD_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} /><Line type="monotone" dataKey="macdSignal" stroke={MACD_SIGNAL_COLOR} strokeWidth={1.5} dot={false} isAnimationActive={false} />{macdCrossovers.map(({ point, bullish }) => <ReferenceDot key={point.time} x={point.time} y={point.macd!} r={3} fill={bullish ? MACD_HISTOGRAM_POSITIVE_COLOR : MACD_HISTOGRAM_NEGATIVE_COLOR} stroke="none" />)}<Tooltip formatter={(v, n) => [Number(v).toFixed(2), String(n).toUpperCase()]} labelFormatter={(v) => formatTooltipDate(Number(v))} /></ComposedChart></ResponsiveContainer></div>}
-    <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><StatTile label="Day high" value={num(quote?.dayHigh ?? null)} /><StatTile label="Day low" value={num(quote?.dayLow ?? null)} /><StatTile label="Volume" value={compactVolume(quote?.volume ?? null)} /><StatTile label="Market cap" value={compactInr(quote?.marketCap ?? null)} /></dl>
-    {linkToDetails && <Link to="/stock/$symbol" params={{ symbol }} className="mt-4 block rounded-xl bg-surface-2/70 py-2 text-center text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">View full details</Link>}
+
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <span className="font-semibold text-foreground">Candlestick</span><span>🟢 Bullish</span><span>🔴 Bearish</span>
+      <button type="button" onClick={() => setShowSma20((v) => !v)} className={cn("rounded-md border px-2 py-1", showSma20 ? "border-primary/50 text-foreground" : "border-border")}>SMA 20</button>
+      {selectedCandle && <span className="ml-auto num">O {selectedCandle.open.toFixed(2)} · H {selectedCandle.high.toFixed(2)} · L {selectedCandle.low.toFixed(2)} · C {selectedCandle.close.toFixed(2)} · V {selectedCandle.volume.toLocaleString("en-IN")}</span>}
+    </div>
+
+    <div className="mt-3 overflow-hidden rounded-xl border border-border bg-surface-2/30 p-1 sm:p-2">
+      {loading ? <div className="grid h-64 place-items-center text-sm text-muted-foreground">Loading {timeframe.label} candles…</div> : error ? <div className="grid h-64 place-items-center px-6 text-center"><div><p className="font-semibold">Candlestick data unavailable</p><p className="mt-1 text-xs text-muted-foreground">{error}</p></div></div> : !visible.length ? <div className="grid h-64 place-items-center text-sm text-muted-foreground">No candle history available.</div> : <svg viewBox={`0 0 ${W} ${H}`} className="h-auto min-h-[250px] w-full select-none" role="img" aria-label={`${ticker} ${timeframe.label} candlestick chart`}>
+        {ticks.map(({ p, value }) => <g key={p}><line x1={left} x2={W - right} y1={top + p * plotH} y2={top + p * plotH} stroke="currentColor" opacity=".10" strokeDasharray="4 5" /><text x={left - 8} y={top + p * plotH + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity=".65">₹{value.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</text></g>)}
+        {visible.map((c, i) => {
+          const x = left + i * step + (step - bodyWidth) / 2;
+          const bullish = c.close >= c.open;
+          return <g key={c.time} onMouseEnter={() => setSelectedCandle(c)} onClick={() => setSelectedCandle(c)} className="cursor-crosshair"><CandleBody x={x} yOpen={y(c.open)} yClose={y(c.close)} yHigh={y(c.high)} yLow={y(c.low)} width={bodyWidth} bullish={bullish} /><rect x={x} y={H - 38 - (c.volume / volumeMax) * 35} width={bodyWidth} height={(c.volume / volumeMax) * 35} fill={bullish ? "#22c55e" : "#ef4444"} opacity=".16" /></g>;
+        })}
+        {showSma20 && smaPath && <polyline points={smaPath} fill="none" stroke="#f59e0b" strokeWidth="2" opacity=".9" />}
+        {visible.filter((_, i) => i === 0 || i === visible.length - 1 || i % Math.max(1, Math.floor(visible.length / 5)) === 0).map((c) => { const i = visible.indexOf(c); return <text key={c.time} x={left + i * step + step / 2} y={H - 8} textAnchor="middle" fontSize="10" fill="currentColor" opacity=".65">{dateLabel(c.time, timeframe.interval)}</text>; })}
+      </svg>}
+    </div>
+    <p className="mt-2 text-[11px] text-muted-foreground">OHLCV candles from the market-data provider. Intraday retention depends on provider availability; no synthetic candles are generated.</p>
   </section>;
 }
