@@ -25,6 +25,25 @@ const DOMAIN_BIAS: Partial<Record<AIRoutePlan["intent"], Partial<Record<Research
   "compare-stocks": { market: 12, fundamental: 12, technical: 8 },
 };
 
+/** Evidence-source trust is deliberately additive, never a license to invent facts. */
+const SOURCE_PRIORITY: Record<string, number> = {
+  nse: 16,
+  bse: 16,
+  "exchange-filings": 15,
+  "investor-relations": 13,
+  crisil: 12,
+  icra: 12,
+  care: 12,
+  "india-ratings": 12,
+  brickwork: 11,
+  reuters: 9,
+  moneycontrol: 6,
+  "economic-times": 6,
+  "business-standard": 6,
+  livemint: 5,
+  "google-news": 2,
+};
+
 const freshnessBoost = (observedAt: string | null): number => {
   if (!observedAt) return 0;
   const ageDays = (Date.now() - Date.parse(observedAt)) / 86_400_000;
@@ -35,8 +54,14 @@ const freshnessBoost = (observedAt: string | null): number => {
   return 0;
 };
 
+const sourcePriority = (sourceId: string): number => SOURCE_PRIORITY[sourceId.toLowerCase()] ?? 0;
+
 const score = (evidence: ResearchEvidence, plan: AIRoutePlan): number =>
-  evidence.importance + (DOMAIN_BIAS[plan.intent]?.[evidence.domain] ?? 0) + evidence.reliability * 10 + freshnessBoost(evidence.observedAt);
+  evidence.importance +
+  (DOMAIN_BIAS[plan.intent]?.[evidence.domain] ?? 0) +
+  evidence.reliability * 10 +
+  sourcePriority(evidence.sourceId) +
+  freshnessBoost(evidence.observedAt);
 
 /**
  * Keep the best item from every populated domain first, then spend the
