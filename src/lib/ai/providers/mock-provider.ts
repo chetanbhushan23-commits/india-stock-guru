@@ -45,6 +45,18 @@ const claims = (items: PromptEvidence[], limit: number) =>
   items.slice(0, limit).map((item) => ({ statement: render(item), evidenceIds: [item.id] }));
 
 function directionalClaim(evidence: PromptEvidence[], symbol: string) {
+  // The reasoning layer creates one attributable directional-synthesis item
+  // for each trend-style question. Prefer it over raw bullish/bearish counts:
+  // the synthesis already resolves the complete technical/market picture,
+  // including a legitimate neutral/range-bound state.
+  const synthesized = evidence.find((item) => item.id.startsWith("derived:direction:"));
+  if (synthesized) {
+    const text = synthesized.value?.kind === "text"
+      ? String(synthesized.value.value ?? "")
+      : "";
+    if (text) return { statement: text, evidenceIds: [synthesized.id] };
+  }
+
   const directional = evidence.filter((item) => item.direction === "bullish" || item.direction === "bearish");
   if (directional.length) {
     const bullish = directional.filter((item) => item.direction === "bullish");
