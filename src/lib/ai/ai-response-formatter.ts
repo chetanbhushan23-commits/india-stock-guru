@@ -31,7 +31,7 @@ export function parseModelJson(raw: string): RawAnswer | null {
 }
 
 export function insufficientAnswer(params: { intent: AIIntent; question: string; symbols: string[]; reason: string; providerId: string; missing?: string[] }): AIAnswer {
-  return { version: 1, intent: params.intent, symbols: params.symbols, question: params.question, summary: INSUFFICIENT_EVIDENCE_MESSAGE, evidence: [], technicalEvidence: [], fundamentalEvidence: [], newsEvidence: [], corporateEvents: [], risks: [], missingInformation: [params.reason, ...(params.missing ?? [])], confidence: 0, sources: [], insufficient: true, generatedAt: new Date().toISOString(), providerId: params.providerId, model: null, droppedClaims: 0 };
+  return { version: 1, intent: params.intent, symbols: params.symbols, question: params.question, summary: `Latest evidence date: unavailable. English: ${INSUFFICIENT_EVIDENCE_MESSAGE} Hindi: पर्याप्त सत्यापित साक्ष्य उपलब्ध नहीं हैं।`, evidence: [], technicalEvidence: [], fundamentalEvidence: [], newsEvidence: [], corporateEvents: [], risks: [], missingInformation: [params.reason, ...(params.missing ?? [])], confidence: 0, sources: [], insufficient: true, generatedAt: new Date().toISOString(), providerId: params.providerId, model: null, droppedClaims: 0 };
 }
 
 const TREND_INTENTS: AIIntent[] = ["technical-analysis", "swing-trade", "explain-movement", "why-rise", "why-fall", "buy-or-wait"];
@@ -42,15 +42,21 @@ function claimFromEvidence(item: AISelectedContext["evidence"][number]): AIClaim
 function domainFallback(contexts: AISelectedContext[], domains: AISelectedContext["evidence"][number]["domain"][], limit = 6): AIClaim[] {
   return contexts.flatMap((context) => context.evidence.filter((item) => domains.includes(item.domain)).sort((a, b) => b.importance * b.reliability - a.importance * a.reliability).slice(0, limit).map(claimFromEvidence));
 }
+function latestDate(context: AISelectedContext): string {
+  const dates = context.evidence.map((item) => item.observedAt).filter(Boolean).sort();
+  return dates.at(-1) ?? context.builtAt.slice(0, 10) ?? "unknown";
+}
 function trendFallback(contexts: AISelectedContext[], intent: AIIntent): { summary: string; evidence: AIClaim[]; technicalEvidence: AIClaim[] } | null {
   if (!TREND_INTENTS.includes(intent)) return null;
   const context = contexts[0]; if (!context) return null;
   const synthesis = context.evidence.find((item) => item.key === "technical.directionalSynthesis"); if (!synthesis) return null;
   const supporting = context.evidence.filter((item) => item.domain === "technical" && item.id !== synthesis.id).sort((a, b) => b.importance * b.reliability - a.importance * a.reliability).slice(0, 4);
   const direction = synthesis.direction === "bullish" ? "bullish" : synthesis.direction === "bearish" ? "bearish" : "neutral/sideways";
+  const hindiDirection = direction === "bullish" ? "तेजी" : direction === "bearish" ? "मंदी" : "न्यूट्रल/साइडवेज";
   const synthesisText = synthesis.value.kind === "text" ? synthesis.value.value : `${context.ticker} has a ${direction} technical bias.`;
   const supportingText = supporting.length ? `Key supporting indicators include ${supporting.map((item) => item.label + (item.value.kind === "number" ? ` at ${item.value.value}${item.value.unit === "percent" ? "%" : ""}` : "")).join(", ")}.` : "The available technical evidence is limited, so the bias should be treated as qualified.";
-  return { summary: `${context.ticker}'s current evidence-derived technical bias is ${direction}. ${synthesisText} ${supportingText} This conclusion is based only on the verified research context.`, evidence: [{ statement: synthesisText, evidenceIds: [synthesis.id] }], technicalEvidence: [{ statement: synthesisText, evidenceIds: [synthesis.id] }, ...supporting.map(claimFromEvidence)] };
+  const date = latestDate(context);
+  return { summary: `Latest evidence date: ${date}. English: ${context.ticker}'s current evidence-derived technical bias is ${direction}. ${synthesisText} ${supportingText} Hindi: ${context.ticker} का मौजूदा सत्यापित तकनीकी रुझान ${hindiDirection} है। उपलब्ध संकेतकों के आधार पर यह निष्कर्ष निकाला गया है; सीमित साक्ष्य होने पर इसे सावधानी से देखें।`, evidence: [{ statement: synthesisText, evidenceIds: [synthesis.id] }], technicalEvidence: [{ statement: synthesisText, evidenceIds: [synthesis.id] }, ...supporting.map(claimFromEvidence)] };
 }
 const isTransientFetchSummary = (summary: string): boolean => /^(failed to fetch|failed fetching|network error|network request failed|request failed|unable to fetch|fetch failed)[.!]?$/i.test(summary.trim());
 const isGenericTrendFailure = (summary: string): boolean => /does not contain enough directional evidence|not enough directional evidence|insufficient.*directional evidence/i.test(summary);
