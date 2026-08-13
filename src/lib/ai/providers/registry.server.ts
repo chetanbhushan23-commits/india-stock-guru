@@ -1,10 +1,8 @@
 /**
  * Provider registry (server-only).
  *
- * Resolution order: explicit request override → AI_PROVIDER env → local-first
- * configured provider → other configured providers → MockProvider.
- * The registry also exposes an ordered fallback chain so a transient provider
- * outage does not break grounded Q&A.
+ * Resolution order: explicit request override → AI_PROVIDER env → configured
+ * provider preference → remaining configured providers → MockProvider.
  */
 
 import type { AIProvider, AIProviderId } from "../ai-types";
@@ -20,8 +18,9 @@ export const AI_PROVIDERS: Record<AIProviderId, AIProvider> = {
   mock: mockProvider,
 };
 
-// Free/local-first. Hosted providers remain available as configured fallbacks.
-const PREFERENCE: AIProviderId[] = ["ollama", "openai", "gemini"];
+// Gemini is the preferred cloud reasoning/research provider. Ollama remains
+// available as an explicit/local fallback and OpenAI remains optional.
+const PREFERENCE: AIProviderId[] = ["gemini", "ollama", "openai"];
 
 export function providerCandidates(requested?: AIProviderId): AIProvider[] {
   const ordered: AIProviderId[] = [];
