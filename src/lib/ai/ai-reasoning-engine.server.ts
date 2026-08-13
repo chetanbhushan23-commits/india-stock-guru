@@ -3,12 +3,12 @@
  *
  * Pipeline: route → resolve symbols → build ResearchContext(s) → enrich
  * directional evidence from the FULL context → select evidence → prompt a
- * provider → format + validate the answer.
+ * provider → validate the model output → return the first valid grounded
+ * answer.
  *
- * Important: directional synthesis must happen before evidence budgeting and
- * before the hard requirements gate. Otherwise a valid technical signal can
- * be dropped by the selector and the Q&A repeatedly falls into the generic
- * "insufficient evidence" response.
+ * Provider failover is deliberately after research/context construction: every
+ * provider receives the same evidence-backed prompt, so switching providers
+ * never changes the factual data layer.
  */
 
 import { routeQuestion } from "./ai-question-router";
@@ -16,7 +16,7 @@ import { canUsePartialEvidence, meetsRequirements, selectContext } from "./ai-co
 import { addDirectionalEvidence } from "./directional-evidence";
 import { ANSWER_SCHEMA, ANSWER_SCHEMA_NAME, SYSTEM_PROMPT, buildUserPrompt } from "./ai-prompt";
 import { formatAnswer, insufficientAnswer, parseModelJson } from "./ai-response-formatter";
-import { resolveProvider } from "./providers/registry.server";
+import { providerCandidates, resolveProvider } from "./providers/registry.server";
 import { resolveResearchSymbols, runResearchContext } from "../research-context.server";
 import type { ResearchContext, ResearchDomain, ResearchRequest } from "../research-types";
 import type { AIReasoningRequest, AIReasoningResult, AISelectedContext } from "./ai-types";
@@ -37,7 +37,8 @@ export async function reasonOverContexts(
   contexts: ResearchContext[],
 ): Promise<AIReasoningResult> {
   const { plan } = routeQuestion(request.question, request.symbols ?? []);
-  const provider = resolveProvider(request.provider);
+  const providers = providerCandidates(request.provider);
+  const fallbackProviderId = providers[0]?.id ?? resolveProvider(request.provider).id;
 
   // MUST enrich before selectContext(). The derived synthesis has high
   // importance and therefore survives the evidence budget. More importantly,
@@ -85,52 +86,56 @@ export async function reasonOverContexts(
         question: request.question,
         symbols: selected.map((context) => context.symbol),
         reason: gate.reason ?? partialGate.reason ?? "The evidence set does not meet this question's requirements.",
-        providerId: provider.id,
+        providerId: fallbackProviderId,
         missing: selected.flatMap((context) => context.gaps.map((gap) => `${context.ticker} · ${gap.label}: ${gap.reason}`)),
       }),
     };
   }
 
-  let raw: string;
-  let model: string | null;
-  try {
-    const response = await provider.complete({
-      system: SYSTEM_PROMPT,
-      user: buildUserPrompt(request.question, plan, selected, request.portfolio),
-      schema: ANSWER_SCHEMA,
-      schemaName: ANSWER_SCHEMA_NAME,
-      intent: plan.intent,
-    });
-    raw = response.raw;
-    model = response.model;
-  } catch (error) {
-    return {
-      ok: false,
-      error: {
-        code: "PROVIDER_ERROR",
-        message: error instanceof Error ? error.message : "The AI provider failed.",
-        intent: plan.intent,
-        symbols: selected.map((context) => context.symbol),
-      },
-    };
-  }
+  const prompt = {
+    system: SYSTEM_PROMPT,
+    user: buildUserPrompt(request.question, plan, selected, request.portfolio),
+    schema: ANSWER_SCHEMA,
+    schemaName: ANSWER_SCHEMA_NAME,
+    intent: plan.intent,
+  };
 
-  const parsed = parseModelJson(raw);
-  if (!parsed) {
-    return {
-      ok: false,
-      error: {
-        code: "INVALID_MODEL_OUTPUT",
-        message: "The model did not return valid JSON for the required answer schema.",
-        intent: plan.intent,
-        symbols: selected.map((context) => context.symbol),
-      },
-    };
+  const failures: string[] = [];
+  for (const provider of providers) {
+    try {
+      const response = await provider.complete(prompt);
+      const parsed = parseModelJson(response.raw);
+      if (!parsed) {
+        failures.push(`${provider.id}: invalid JSON`);
+        continue;
+      }
+
+      return {
+        ok: true,
+        data: formatAnswer({
+          raw: parsed,
+          intent: plan.intent,
+          question: request.question,
+          contexts: selected,
+          providerId: provider.id,
+          model: response.model,
+        }),
+      };
+    } catch (error) {
+      failures.push(`${provider.id}: ${error instanceof Error ? error.message : "provider failed"}`);
+    }
   }
 
   return {
-    ok: true,
-    data: formatAnswer({ raw: parsed, intent: plan.intent, question: request.question, contexts: selected, providerId: provider.id, model }),
+    ok: false,
+    error: {
+      code: "PROVIDER_ERROR",
+      message: failures.length
+        ? `All configured AI providers failed: ${failures.join(" | ")}`
+        : "No configured AI provider is available.",
+      intent: plan.intent,
+      symbols: selected.map((context) => context.symbol),
+    },
   };
 }
 
