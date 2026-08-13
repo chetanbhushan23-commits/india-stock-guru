@@ -21,6 +21,7 @@ import { Portfolio } from "@/components/market/Portfolio";
 import { AiAssistant } from "@/components/market/AiAssistant";
 import { NewsFeed } from "@/components/market/NewsFeed";
 import { ChartPanel } from "@/components/market/ChartPanel";
+import { StockIntelligencePanel } from "@/components/market/StockIntelligencePanel";
 import { defaultWatchlist } from "@/data/market";
 import { quoteQuery } from "@/lib/market-queries";
 import { stripSuffix } from "@/lib/market-types";
@@ -68,7 +69,7 @@ function Dashboard() {
             </div>
           </div>
           <nav className="hidden flex-1 items-center justify-center gap-1 xl:flex" aria-label="Primary navigation">
-            {[ ["Dashboard", "/"], ["AI Research", "/ai-assistant"], ["Research", "/research"], ["Compare", "/compare"], ["Scanner", "/strategy-scanner"] ].map(([label, to]) => (
+            {[["Dashboard", "/"], ["AI Research", "/ai-assistant"], ["Research", "/research"], ["Compare", "/compare"], ["Scanner", "/strategy-scanner"]].map(([label, to]) => (
               <Link key={to} to={to} className="rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition hover:bg-surface-2 hover:text-foreground" activeProps={{ className: "rounded-lg bg-surface-2 px-3 py-2 text-xs font-semibold text-foreground" }}>{label}</Link>
             ))}
           </nav>
@@ -85,6 +86,7 @@ function Dashboard() {
           <StockSearch watchlist={watchlist} onToggle={toggleWatch} />
         </section>
         <MarketOverview />
+        <StockIntelligencePanel symbol={activeSymbol} />
         <section className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="min-w-0 space-y-4"><ChartPanel quote={activeQuote} symbol={activeSymbol} isLoading={isLoading} /><Portfolio /></div>
           <aside className="min-w-0 space-y-4"><div className="flex items-center gap-2 px-1"><span className="grid h-7 w-7 place-items-center rounded-lg bg-primary/12 text-primary"><Sparkles className="h-3.5 w-3.5" /></span><div><p className="text-xs font-bold">AI Intelligence</p><p className="text-[10px] text-muted-foreground">{symbol} · evidence-backed</p></div></div><AiAssistant activeSymbol={symbol} /><Watchlist symbols={watchlist} activeSymbol={activeSymbol} onSelect={setActiveSymbol} onRemove={toggleWatch} /></aside>
