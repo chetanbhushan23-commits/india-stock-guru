@@ -5,6 +5,11 @@
  * provider preference → remaining configured providers → MockProvider.
  */
 
+// Vite loads .env for frontend import.meta.env, but server provider code reads
+// process.env directly. Load the local .env file explicitly for local VS Code
+// development so GEMINI_API_KEY is available to the server runtime.
+import "dotenv/config";
+
 import type { AIProvider, AIProviderId } from "../ai-types";
 import { openAIProvider } from "./openai-provider.server";
 import { geminiProvider } from "./gemini-provider.server";
