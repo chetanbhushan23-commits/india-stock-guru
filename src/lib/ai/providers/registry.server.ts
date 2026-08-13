@@ -5,12 +5,6 @@
  * provider preference → remaining configured providers → MockProvider.
  */
 
-// Vite loads .env for frontend import.meta.env, but server provider code reads
-// process.env directly. Load the local .env explicitly and let the current
-// local file override stale Codespaces/terminal environment variables.
-import { config as loadDotEnv } from "dotenv";
-loadDotEnv({ override: true });
-
 import type { AIProvider, AIProviderId } from "../ai-types";
 import { openAIProvider } from "./openai-provider.server";
 import { geminiProvider } from "./gemini-provider.server";
