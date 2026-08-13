@@ -1,9 +1,10 @@
 /**
  * Provider registry (server-only).
  *
- * Resolution order: explicit request override → `AI_PROVIDER` env → first
- * configured hosted provider → MockProvider. Swapping to FastAPI means adding
- * one more adapter here; nothing upstream changes.
+ * Resolution order: explicit request override → AI_PROVIDER env → local-first
+ * configured provider → other configured providers → MockProvider.
+ * The registry also exposes an ordered fallback chain so a transient provider
+ * outage does not break grounded Q&A.
  */
 
 import type { AIProvider, AIProviderId } from "../ai-types";
@@ -19,19 +20,29 @@ export const AI_PROVIDERS: Record<AIProviderId, AIProvider> = {
   mock: mockProvider,
 };
 
-const PREFERENCE: AIProviderId[] = ["openai", "gemini", "ollama"];
+// Free/local-first. Hosted providers remain available as configured fallbacks.
+const PREFERENCE: AIProviderId[] = ["ollama", "openai", "gemini"];
+
+export function providerCandidates(requested?: AIProviderId): AIProvider[] {
+  const ordered: AIProviderId[] = [];
+  const configured = process.env["AI_PROVIDER"] as AIProviderId | undefined;
+  if (requested) ordered.push(requested);
+  if (configured) ordered.push(configured);
+  ordered.push(...PREFERENCE);
+
+  const seen = new Set<AIProviderId>();
+  return ordered
+    .filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .map((id) => AI_PROVIDERS[id])
+    .filter((provider) => provider?.isConfigured());
+}
 
 export function resolveProvider(requested?: AIProviderId): AIProvider {
-  if (requested) {
-    const provider = AI_PROVIDERS[requested];
-    if (provider?.isConfigured()) return provider;
-  }
-  const configured = process.env["AI_PROVIDER"] as AIProviderId | undefined;
-  if (configured && AI_PROVIDERS[configured]?.isConfigured()) return AI_PROVIDERS[configured];
-  for (const id of PREFERENCE) {
-    if (AI_PROVIDERS[id].isConfigured()) return AI_PROVIDERS[id];
-  }
-  return mockProvider;
+  return providerCandidates(requested)[0] ?? mockProvider;
 }
 
 export function providerStatus() {
