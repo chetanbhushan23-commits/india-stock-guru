@@ -1,4 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AIQuestionsAnswers } from "@/components/ai/AIQuestionsAnswers";
+import { AIQuestionsAnswersWorkspace } from "@/components/ai/AIQuestionsAnswersWorkspace";
 
-export const Route = createFileRoute("/ai-questions-answers")({ component: AIQuestionsAnswers });
+export const Route = createFileRoute("/ai-questions-answers")({ component: AIQuestionsAnswersWorkspace });
