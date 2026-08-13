@@ -8,8 +8,6 @@ export type QAHistoryItem = {
   pinned: boolean;
 };
 
-const HISTORY_KEY = "dalal-desk-ai-qa-history-v1";
-
 export function claimText(claims: AIClaim[]): string[] {
   return claims.map((claim) => claim.statement).filter(Boolean);
 }
@@ -40,22 +38,45 @@ export function confidenceLabel(score: number) {
   return "Low";
 }
 
+/**
+ * History is no longer persisted in localStorage. Supabase is the permanent
+ * source of truth; this function only preserves the current in-memory UI list.
+ */
 export function loadQAHistory(): QAHistoryItem[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
+  return [];
 }
 
-export function saveQAHistory(items: QAHistoryItem[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 50)));
+/** Intentionally a no-op: permanent persistence happens on the server. */
+export function saveQAHistory(_items: QAHistoryItem[]) {
+  // Supabase persistence is handled by POST /api/ai/ask and /api/ai/history.
 }
 
 export function addQAHistory(answer: AIAnswer, previous: QAHistoryItem[]): QAHistoryItem[] {
-  const item: QAHistoryItem = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, question: answer.question, answer, createdAt: new Date().toISOString(), pinned: false };
-  const next = [item, ...previous.filter((entry) => entry.question !== answer.question)];
-  saveQAHistory(next);
-  return next;
+  const item: QAHistoryItem = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    question: answer.question,
+    answer,
+    createdAt: new Date().toISOString(),
+    pinned: false,
+  };
+  return [item, ...previous.filter((entry) => entry.question !== answer.question)].slice(0, 50);
+}
+
+/** Load permanent server history for UI consumers that need cross-refresh history. */
+export async function loadQAHistoryFromServer(limit = 50): Promise<QAHistoryItem[]> {
+  try {
+    const response = await fetch(`/api/ai/history?limit=${Math.min(Math.max(limit, 1), 100)}`);
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { ok?: boolean; data?: Array<{ id: string; question: string; answer: AIAnswer; created_at: string; pinned: boolean }> };
+    if (!payload.ok || !Array.isArray(payload.data)) return [];
+    return payload.data.map((item) => ({
+      id: item.id,
+      question: item.question,
+      answer: item.answer,
+      createdAt: item.created_at,
+      pinned: item.pinned,
+    }));
+  } catch {
+    return [];
+  }
 }
