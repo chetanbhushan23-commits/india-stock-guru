@@ -13,6 +13,7 @@ import {
   Copy,
   Download,
   FileText,
+  Globe2,
   LineChart,
   Newspaper,
   Pin,
@@ -71,32 +72,67 @@ function Stat({ label, value }: { label: string; value: number | string }) {
   return <div className="rounded-xl border border-border bg-background/60 px-3 py-3"><p className="text-lg font-black tabular-nums">{value}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{label}</p></div>;
 }
 
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function researchStage(elapsedMs: number) {
+  if (elapsedMs < 1500) return { label: "Resolving stock / symbol", detail: "Identifying NSE/BSE security and research intent." };
+  if (elapsedMs < 4000) return { label: "Searching web sources", detail: "Checking configured market, company, filing and news sources." };
+  if (elapsedMs < 7000) return { label: "Collecting latest evidence", detail: "Combining technical, fundamental, news and corporate evidence." };
+  if (elapsedMs < 10000) return { label: "Gemini is researching", detail: "Gemini Search grounding is being used for fresh web information." };
+  return { label: "Validating & summarising", detail: "Cross-checking evidence, dates and sources before the answer." };
+}
+
 export function AIQuestionsAnswers() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<AIAnswer | null>(null);
   const [loading, setLoading] = useState(false);
+  const [researchStartedAt, setResearchStartedAt] = useState<number | null>(null);
+  const [researchElapsed, setResearchElapsed] = useState(0);
   const [history, setHistory] = useState<QAHistoryItem[]>([]);
   const [selectedHistory, setSelectedHistory] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<ResearchTab>("overview");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  useEffect(() => setHistory(loadQAHistory()), []);
+  useEffect(() => {
+    if (!loading || researchStartedAt === null) return;
+    const timer = window.setInterval(() => setResearchElapsed(Date.now() - researchStartedAt), 100);
+    return () => window.clearInterval(timer);
+  }, [loading, researchStartedAt]);
+
   const score = useMemo(() => (answer ? qualityScore(answer) : 0), [answer]);
+  const stage = researchStage(researchElapsed);
 
   async function submit(nextQuestion = question) {
     const text = nextQuestion.trim();
     if (!text || loading) return;
-    setQuestion(text); setLoading(true); setError(""); setActiveTab("overview");
+    setQuestion(text);
+    setAnswer(null);
+    setLoading(true);
+    setError("");
+    setActiveTab("overview");
+    setResearchStartedAt(Date.now());
+    setResearchElapsed(0);
+    const started = Date.now();
     try {
       const result = await askAI({ data: { question: text } });
-      if (!result.ok) { setAnswer(null); setError(result.error.message); return; }
-      setAnswer(result.data); setHistory((current) => addQAHistory(result.data, current));
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to generate an answer."); }
-    finally { setLoading(false); }
+      const elapsed = Date.now() - started;
+      setResearchElapsed(elapsed);
+      if (!result.ok) { setError(result.error.message); return; }
+      setAnswer(result.data);
+      setHistory((current) => addQAHistory(result.data, current));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to generate an answer.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function newQuestion() { setAnswer(null); setQuestion(""); setError(""); setSelectedHistory(null); setActiveTab("overview"); }
+  function newQuestion() { setAnswer(null); setQuestion(""); setError(""); setActiveTab("overview"); setResearchStartedAt(null); setResearchElapsed(0); }
   function pin(id: string) { const next = history.map((item) => item.id === id ? { ...item, pinned: !item.pinned } : item); setHistory(next); saveQAHistory(next); }
   function openHistory(item: QAHistoryItem) { setSelectedHistory(item.id); setAnswer(item.answer); setQuestion(item.question); setError(""); setActiveTab("overview"); }
   function copyAnswer() { if (answer) void navigator.clipboard?.writeText([answer.summary, ...answerSectionsForCopy(answer)].join("\n\n")); }
@@ -109,14 +145,13 @@ export function AIQuestionsAnswers() {
   return (
     <main className="min-h-screen w-full overflow-x-hidden bg-background text-foreground">
       <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur"><div className="mx-auto flex h-16 max-w-[1900px] items-center gap-3 px-4 sm:px-6 lg:px-8">
-        <button onClick={() => setSidebarOpen((value) => !value)} className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Toggle research history"><Activity className="h-5 w-5" /></button>
         <div className="flex min-w-0 items-center gap-3"><div className="rounded-xl bg-primary p-2 text-primary-foreground shadow-lg"><Sparkles className="h-5 w-5" /></div><div className="min-w-0"><p className="truncate text-sm font-black tracking-tight sm:text-base">ChetanMarkets AI</p><p className="truncate text-[9px] uppercase tracking-[0.2em] text-muted-foreground">Grounded Indian Market Intelligence</p></div></div>
         <div className="ml-auto hidden items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-3 py-1.5 text-xs text-emerald-500 sm:flex"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Evidence engine ready</div>
         <button onClick={newQuestion} className="rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted sm:text-sm">+ New research</button>
       </div></header>
 
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1900px]">
-        {sidebarOpen && <aside className="hidden w-64 shrink-0 border-r border-border bg-card/30 p-4 lg:block xl:w-72"><div className="mb-5 flex items-center gap-2 px-1"><Clock3 className="h-4 w-4 text-primary" /><span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Research history</span></div><div className="space-y-2 overflow-y-auto lg:max-h-[calc(100vh-7rem)]">{history.length === 0 && <p className="px-1 text-xs leading-5 text-muted-foreground">Saved questions will appear here.</p>}{history.map((item) => <div key={item.id} className={`rounded-xl border p-3 transition ${selectedHistory === item.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}><button onClick={() => openHistory(item)} className="w-full text-left text-xs leading-5">{item.question}</button><button onClick={() => pin(item.id)} className="mt-2 inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">{item.pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}{item.pinned ? "Unpin" : "Pin"}</button></div>)}</div></aside>}
+        <aside className="hidden w-64 shrink-0 border-r border-border bg-card/30 p-4 lg:block xl:w-72"><div className="mb-5 flex items-center gap-2 px-1"><Clock3 className="h-4 w-4 text-primary" /><span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Research history</span></div><div className="space-y-2 overflow-y-auto lg:max-h-[calc(100vh-7rem)]">{history.length === 0 && <p className="px-1 text-xs leading-5 text-muted-foreground">Saved questions will appear here.</p>}{history.map((item) => <div key={item.id} className={`rounded-xl border p-3 transition ${selectedHistory === item.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}><button onClick={() => openHistory(item)} className="w-full text-left text-xs leading-5">{item.question}</button><button onClick={() => pin(item.id)} className="mt-2 inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">{item.pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}{item.pinned ? "Unpin" : "Pin"}</button></div>)}</div></aside>
 
         <section className="min-w-0 flex-1 px-3 py-4 sm:px-6 sm:py-6 lg:px-8"><div className="mx-auto w-full max-w-[1500px] space-y-5">
           <section className="overflow-hidden rounded-3xl border border-border bg-card shadow-xl"><div className="relative p-5 sm:p-7 lg:p-8"><div className="pointer-events-none absolute right-0 top-0 h-52 w-52 rounded-full bg-primary/10 blur-3xl" /><div className="relative">
@@ -126,7 +161,7 @@ export function AIQuestionsAnswers() {
           </div></div></section>
 
           {error && <div className="flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm"><XCircle className="mt-0.5 h-5 w-5 shrink-0" /><div><b>Research request failed</b><p className="mt-1 text-muted-foreground">{error}</p></div></div>}
-          {loading && <section className="rounded-2xl border border-border bg-card p-6"><div className="flex items-center gap-3"><RefreshCw className="h-5 w-5 animate-spin text-primary" /><div><p className="font-bold">Building grounded research…</p><p className="text-sm text-muted-foreground">Resolving the stock, collecting evidence and validating the answer.</p></div></div></section>}
+          {loading && <section className="overflow-hidden rounded-2xl border border-primary/20 bg-card p-5 shadow-sm sm:p-6"><div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="rounded-xl bg-primary/10 p-2"><RefreshCw className="h-5 w-5 animate-spin text-primary" /></div><div><p className="font-bold">{stage.label}</p><p className="mt-1 text-sm text-muted-foreground">{stage.detail}</p></div></div><div className="rounded-xl border border-border bg-background px-4 py-2 text-right"><p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Research time</p><p className="text-xl font-black tabular-nums text-primary">{formatElapsed(researchElapsed)}</p></div></div><div className="mt-5 grid gap-2 sm:grid-cols-5"><div className="rounded-xl border border-border bg-background/60 p-3"><p className="text-xs font-semibold">1. Resolve</p><p className="mt-1 text-[10px] text-muted-foreground">NSE / BSE symbol</p></div><div className="rounded-xl border border-border bg-background/60 p-3"><p className="text-xs font-semibold">2. Web search</p><p className="mt-1 text-[10px] text-muted-foreground">Market + company sources</p></div><div className="rounded-xl border border-border bg-background/60 p-3"><p className="text-xs font-semibold">3. Latest evidence</p><p className="mt-1 text-[10px] text-muted-foreground">News + filings</p></div><div className="rounded-xl border border-border bg-background/60 p-3"><p className="text-xs font-semibold">4. Gemini</p><p className="mt-1 text-[10px] text-muted-foreground">Search grounding</p></div><div className="rounded-xl border border-border bg-background/60 p-3"><p className="text-xs font-semibold">5. Verify</p><p className="mt-1 text-[10px] text-muted-foreground">Dates + evidence</p></div></div><div className="mt-4 flex items-center gap-2 rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground"><Globe2 className="h-4 w-4 text-primary" /> Research is checking configured web/market sources; verified source links will appear below when the research completes.</div></section>}
 
           {answer && !loading && <>
             <div className="grid gap-3 sm:grid-cols-4"><Stat label="Confidence" value={`${answer.confidence}/100`} /><Stat label="Verified sources" value={answer.sources.length} /><Stat label="Technical claims" value={answer.technicalEvidence.length} /><Stat label="Risk flags" value={answer.risks.length} /></div>
@@ -139,7 +174,7 @@ export function AIQuestionsAnswers() {
             {activeTab === "corporate" && <SectionCard title="Corporate Actions & Events" icon={Building2}><Claims claims={answer.corporateEvents} /></SectionCard>}
             {activeTab === "risks" && <div className="grid gap-5 lg:grid-cols-2"><SectionCard title="Risk Flags" icon={AlertTriangle}><Claims claims={answer.risks} /></SectionCard><SectionCard title="Missing Information" icon={FileText}>{answer.missingInformation.length ? <ul className="space-y-2 text-sm leading-6">{answer.missingInformation.map((item) => <li key={item} className="rounded-xl border border-border p-3">{item}</li>)}</ul> : <p className="text-sm text-muted-foreground">No material gaps reported.</p>}</SectionCard></div>}
             {activeTab === "sources" && <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]"><SectionCard title="Verified Sources" icon={BookOpen}>{answer.sources.length ? <div className="grid gap-3 sm:grid-cols-2">{answer.sources.map((source) => <a key={source.id} href={source.url ?? "#"} target="_blank" rel="noreferrer" className="group rounded-xl border border-border p-4 hover:border-primary/50 hover:bg-muted"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><b className="text-sm">{source.name}</b><span className="mt-1 block text-xs text-muted-foreground">{source.domain}</span>{source.observedAt && <span className="mt-1 block text-[10px] text-muted-foreground">Observed: {source.observedAt}</span>}</div><ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-1" /></div></a>)}</div> : <p className="text-sm text-muted-foreground">No verified sources available.</p>}</SectionCard><SectionCard title="Evidence Status" icon={ShieldCheck}><p className="text-sm leading-6 text-muted-foreground">Every displayed claim is tied to evidence returned by the grounded research pipeline. Missing evidence is shown instead of invented.</p></SectionCard></div>}
-            <footer className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Generated {new Date(answer.generatedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2"><button onClick={copyAnswer} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm"><Copy className="h-4 w-4" /> Copy</button><button onClick={exportMarkdown} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm"><Download className="h-4 w-4" /> Export</button><button onClick={() => void submit(answer.question)} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm"><RefreshCw className="h-4 w-4" /> Regenerate</button></div></footer>
+            <footer className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Generated {new Date(answer.generatedAt).toLocaleString()} · Research completed in {formatElapsed(researchElapsed)}</p><div className="flex flex-wrap gap-2"><button onClick={copyAnswer} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm"><Copy className="h-4 w-4" /> Copy</button><button onClick={exportMarkdown} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm"><Download className="h-4 w-4" /> Export</button><button onClick={() => void submit(answer.question)} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm"><RefreshCw className="h-4 w-4" /> Regenerate</button></div></footer>
           </>}
 
           {!answer && !loading && !error && <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><SectionCard title="Grounded AI" icon={BrainCircuit}><p className="text-sm leading-6 text-muted-foreground">Answers are built from verified research context, not guesses.</p></SectionCard><SectionCard title="Technical" icon={LineChart}><p className="text-sm leading-6 text-muted-foreground">Trend, momentum and swing evidence in one readable view.</p></SectionCard><SectionCard title="Evidence" icon={ShieldCheck}><p className="text-sm leading-6 text-muted-foreground">Sources, timestamps, confidence and missing data stay visible.</p></SectionCard><SectionCard title="History" icon={WalletCards}><p className="text-sm leading-6 text-muted-foreground">Pin, reopen, copy and export previous research.</p></SectionCard></section>}
