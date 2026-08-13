@@ -19,18 +19,7 @@ const claimArray = (description: string) => ({
 export const ANSWER_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "summary",
-    "evidence",
-    "technicalEvidence",
-    "fundamentalEvidence",
-    "newsEvidence",
-    "corporateEvents",
-    "risks",
-    "missingInformation",
-    "confidence",
-    "insufficient",
-  ],
+  required: ["summary", "evidence", "technicalEvidence", "fundamentalEvidence", "newsEvidence", "corporateEvents", "risks", "missingInformation", "confidence", "insufficient"],
   properties: {
     summary: { type: "string", description: "3-6 sentence evidence-synthesized narrative answering the question with specific figures, indicator levels, dates and named news events (never vague phrases like 'market factors'). Empty string only when there is no usable evidence." },
     evidence: claimArray("General evidence supporting the summary."),
@@ -39,16 +28,9 @@ export const ANSWER_SCHEMA: Record<string, unknown> = {
     newsEvidence: claimArray("News and publisher-reported evidence."),
     corporateEvents: claimArray("Corporate actions, filings and exchange notices."),
     risks: claimArray("Concrete risks, each backed by evidence."),
-    missingInformation: {
-      type: "array",
-      description: "Facts or evidence domains a complete answer would need but the evidence set lacks.",
-      items: { type: "string" },
-    },
+    missingInformation: { type: "array", description: "Facts or evidence domains a complete answer would need but the evidence set lacks.", items: { type: "string" } },
     confidence: { type: "integer", description: "0-100 confidence in the answer." },
-    insufficient: {
-      type: "boolean",
-      description: "True only when the supplied evidence cannot support even a qualified factual answer.",
-    },
+    insufficient: { type: "boolean", description: "True only when the supplied evidence cannot support even a qualified factual answer." },
   },
 };
 
@@ -66,36 +48,33 @@ ABSOLUTE RULES
 9. Set "insufficient" to true only when there is no usable evidence-backed answer to the actual question. When sufficient evidence exists, provide a qualified summary and a confidence score that reflects the limitations.
 10. Sections that have no supporting evidence must be empty arrays. Never pad a section.
 11. Keep statements in the evidence sections short, factual and dated where the evidence is dated. Currency is INR unless the evidence says otherwise.
-12. For trend, technical-analysis, swing-trade, movement, rise/fall and buy-or-wait questions, interpret the supplied directional evidence. Do not merely repeat that evidence exists. If technical evidence is present, determine the technical bias from its directional indicators and the supplied technical directional synthesis. If the directional synthesis itself reports a neutral/range-bound state (tagged "range-bound"), that is a valid, complete answer — describe it as a range-bound or consolidating picture using the specific indicator readings cited in that synthesis (e.g. RSI level, MACD histogram, price vs moving averages), rather than saying evidence is insufficient. Only say technical confirmation is unavailable when no technical or market directional evidence exists in the context at all.
+12. For trend, technical-analysis, swing-trade, movement, rise/fall and buy-or-wait questions, interpret the supplied directional evidence. Do not merely repeat that evidence exists. If technical evidence is present, determine the technical bias from its directional indicators and the supplied technical directional synthesis. If the directional synthesis itself reports a neutral/range-bound state (tagged "range-bound"), that is a valid, complete answer — describe it as a range-bound or consolidating picture using the specific indicator readings cited in that synthesis, rather than saying evidence is insufficient. Only say technical confirmation is unavailable when no technical or market directional evidence exists in the context at all.
 13. A derived directional-synthesis evidence item is a valid computed fact because it is explicitly derived from the cited evidence ids in its note. Cite the synthesis id and, where useful, its underlying evidence ids.
 14. Never call a context "non-directional" when it contains a directional-synthesis item or directional technical/market evidence. Explain mixed signals when bullish and bearish evidence materially conflict.
-15. SUMMARY REQUIREMENTS (this is the section the user reads first, so it must stand on its own): when evidence is sufficient, write 3-6 sentences, not one. Open with the direct answer to the question, then walk through the specific drivers in descending order of importance, naming concrete figures, percentages, indicator names/levels, or dated news events pulled from the evidence — never a vague phrase like "market factors" or "various reasons" without naming them. Mention the single most important number or fact from each evidence domain you drew on (market, technical, fundamental, news) when it is relevant to the question. If bullish and bearish evidence conflict, say so explicitly and name both sides. Close with the most material caveat or missing domain if one exists. The summary must be readable without opening the evidence sections below it, and every specific figure or claim it makes must also appear in a cited evidenceIds entry elsewhere in the answer.
-16. Do not pad the summary with filler sentences that restate the question or generic disclaimers — every sentence must carry a specific, evidence-backed fact.
-17. For a current-trend question, the first sentence MUST state the current evidence-derived bias: bullish, bearish, or neutral/sideways. If the supplied technical directional synthesis is neutral, say "neutral/sideways" rather than saying that there is not enough directional evidence. Treat a neutral trend as a valid result, not as missing data.`;
+15. SUMMARY REQUIREMENTS: when evidence is sufficient, write 3-6 sentences. Open with the direct answer, then name the most important concrete figures, indicator levels, dates or news events. Close with the most material caveat or missing domain.
+16. Do not pad the summary with filler sentences. Every sentence must carry a specific, evidence-backed fact.
+17. For a current-trend question, the first sentence MUST state the current evidence-derived bias: bullish, bearish, or neutral/sideways. Treat a neutral trend as a valid result, not as missing data.
+18. SOURCE PRIORITY: prefer primary official evidence (NSE/BSE exchange notices and company investor-relations disclosures) over secondary reporting. When available, use CRISIL, ICRA, CARE Ratings, India Ratings or Brickwork rating evidence for credit/rating questions. Use Reuters and established publishers for independent corroboration. Google News is a discovery/aggregation layer and is never by itself sufficient proof of a material claim.
+19. SOURCE CORROBORATION: when a material claim is important and multiple independent sources exist, prefer the claim supported by primary evidence plus independent corroboration. Do not manufacture corroboration when only one source exists.
+20. RATING SAFETY: never state a CRISIL/ICRA/CARE/India Ratings/Brickwork rating unless a corresponding rating-agency evidence object is actually present in the supplied context.`;
 
-const compactEvidence = (context: AISelectedContext) =>
-  context.evidence.map((item) => ({
-    id: item.id,
-    domain: item.domain,
-    label: item.label,
-    value: item.value,
-    direction: item.direction,
-    importance: item.importance,
-    reliability: Number(item.reliability.toFixed(2)),
-    origin: item.origin,
-    source: item.sourceName,
-    at: item.observedAt,
-    url: item.url,
-    note: item.note,
-    tags: item.tags,
-  }));
+const compactEvidence = (context: AISelectedContext) => context.evidence.map((item) => ({
+  id: item.id,
+  domain: item.domain,
+  label: item.label,
+  value: item.value,
+  direction: item.direction,
+  importance: item.importance,
+  reliability: Number(item.reliability.toFixed(2)),
+  origin: item.origin,
+  source: item.sourceName,
+  at: item.observedAt,
+  url: item.url,
+  note: item.note,
+  tags: item.tags,
+}));
 
-export function buildUserPrompt(
-  question: string,
-  plan: AIRoutePlan,
-  contexts: AISelectedContext[],
-  portfolio?: { symbol: string; quantity: number; avgPrice: number }[],
-): string {
+export function buildUserPrompt(question: string, plan: AIRoutePlan, contexts: AISelectedContext[], portfolio?: { symbol: string; quantity: number; avgPrice: number }[]): string {
   const payload = contexts.map((context) => ({
     symbol: context.symbol,
     company: context.companyName,
@@ -104,28 +83,10 @@ export function buildUserPrompt(
     builtAt: context.builtAt,
     quality: context.quality,
     evidence: compactEvidence(context),
-    timeline: context.timeline.map((entry) => ({
-      at: entry.at,
-      domain: entry.domain,
-      title: entry.title,
-      detail: entry.detail,
-      direction: entry.direction,
-      evidenceIds: entry.evidenceIds,
-    })),
-    conflicts: context.conflicts.map((conflict) => ({
-      topic: conflict.topic,
-      description: conflict.description,
-      severity: conflict.severity,
-      evidenceIds: conflict.evidenceIds,
-    })),
+    timeline: context.timeline.map((entry) => ({ at: entry.at, domain: entry.domain, title: entry.title, detail: entry.detail, direction: entry.direction, evidenceIds: entry.evidenceIds })),
+    conflicts: context.conflicts.map((conflict) => ({ topic: conflict.topic, description: conflict.description, severity: conflict.severity, evidenceIds: conflict.evidenceIds })),
     gaps: context.gaps.map((gap) => `${gap.domain}: ${gap.label} — ${gap.reason}`),
-    coverage: context.coverage.map((entry) => ({
-      domain: entry.domain,
-      ok: entry.ok,
-      items: entry.evidenceCount,
-      completeness: entry.completeness,
-      message: entry.message,
-    })),
+    coverage: context.coverage.map((entry) => ({ domain: entry.domain, ok: entry.ok, items: entry.evidenceCount, completeness: entry.completeness, message: entry.message })),
   }));
 
   return [
@@ -137,8 +98,9 @@ export function buildUserPrompt(
     "RESEARCH CONTEXT (the only permitted source of facts):",
     JSON.stringify(payload),
     "",
+    "TRUSTED SOURCE ORDER: NSE/BSE + company IR → rating agencies when directly evidenced → Reuters/established publishers → Google News discovery. Follow this order when evidence conflicts.",
     "Answer as JSON matching the required schema. Cite evidence ids in every statement. If requested domains are missing, disclose them in missingInformation and answer from the available evidence without inventing anything.",
-    "Write the summary as 3-6 sentences naming specific figures, indicator levels, dates and news events from the evidence above — do not return a one-line or generic summary when sufficient evidence exists.",
+    "Write the summary as 3-6 sentences naming specific figures, indicator levels, dates and news events from the evidence above.",
     "For current-trend questions, lead with the explicit bias from the technical directional synthesis: bullish, bearish, or neutral/sideways. Never describe a neutral/sideways synthesis as insufficient directional evidence.",
   ].join("\n");
 }
