@@ -11,18 +11,20 @@ Grounded Indian stock-market intelligence platform for NSE and BSE research, des
 - Fundamental and corporate-event research
 - News and sentiment intelligence
 - Evidence-backed AI Questions & Answers
+- Gemini-powered AI Assistant with Google Search grounding
 - Research timeline, evidence explorer and comparison tools
 - Grounded answers with confidence, source and evidence references
+- English + Hindi summaries with latest observed evidence date
 
-## Free-first AI architecture
+## AI architecture
 
-ChetanMarkets AI does **not** require a paid LLM for its core research pipeline.
+1. **Gemini — primary cloud AI provider** for AI Assistant reasoning and fresh web research through Google Search grounding.
+2. **Normalized research context — authoritative evidence layer** for market, technical, fundamental, news and corporate facts.
+3. **Ollama/local model — local fallback** when configured.
+4. **OpenAI — optional fallback** when explicitly configured.
+5. **Deterministic/rule-based engines — always available** for technical, fundamental and evidence synthesis.
 
-1. **Ollama/local model — preferred AI reasoning provider** when installed locally.
-2. **Deterministic/rule-based engines — always available** for technical, fundamental and evidence synthesis.
-3. **OpenAI/Gemini — optional** and only used when explicitly configured.
-
-The AI receives normalized, timestamped evidence rather than raw provider responses. It must not invent missing prices, ratios, indicators, news or sources.
+Gemini Search grounding can discover and cross-check fresh information, while the application continues to require normalized evidence IDs for material factual claims. The AI must not invent missing prices, ratios, indicators, news, sources or evidence IDs.
 
 ## Market-data architecture
 
@@ -34,7 +36,7 @@ Market data stays behind a server-side provider layer. Technical and AI engines 
 4. **Screener / TradingView / reliable market-news sources** — secondary research and cross-checking.
 5. **Twelve Data — optional fallback** only when `TWELVE_DATA_API_KEY` is configured.
 
-There is no `YAHOO_API_KEY` setting. Yahoo access is handled by the server-side provider implementation. Twelve Data credentials must never be placed in frontend code or committed to GitHub.
+There is no `YAHOO_API_KEY` setting. Yahoo access is handled by the server-side provider implementation. Credentials must never be placed in frontend code or committed to GitHub.
 
 ## Source hierarchy
 
@@ -59,7 +61,8 @@ User question
     -> technical + fundamental + news evidence
     -> evidence deduplication + conflict detection
     -> directional evidence synthesis
-    -> Ollama/local reasoning
+    -> Gemini reasoning + Google Search grounding
+    -> bilingual dated summary
     -> deterministic fallback if AI is unavailable
     -> grounded answer + evidence + confidence + timestamps
 ```
@@ -68,18 +71,19 @@ For trend questions, a neutral/range-bound technical state is a valid result. Th
 
 ## Environment
 
-Copy `.env.example` to `.env` for local development. The default AI configuration is local Ollama:
+Copy `.env.example` to `.env` for local development:
 
 ```env
-AI_PROVIDER=ollama
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=llama3.1:8b
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
-Optional Twelve Data fallback:
+Local fallback:
 
 ```env
-TWELVE_DATA_API_KEY=
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=llama3.1:8b
 ```
 
 Never commit `.env` or real credentials.
@@ -95,4 +99,4 @@ npm run dev
 
 The current product name is **ChetanMarkets AI**. The repository contains the React + TypeScript frontend and the server-side market-data/AI integration layers used by the application.
 
-See `docs/free-first-ai-data-architecture.md` for the complete free-first provider, source, grounding and failure-handling policy.
+See `docs/free-first-ai-data-architecture.md` for the complete provider, source, grounding and failure-handling policy.
